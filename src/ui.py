@@ -45,7 +45,7 @@ SEGMENT_COLORS = {
     "Occasional": PALETTE["muted"], "At risk": PALETTE["amber"], "Lapsed": PALETTE["clay"],
 }
 
-STEPS = ["Load orders", "Confirm columns", "Review cleaning", "Retention results", "Budget scenario"]
+STEPS = ["Load orders", "Confirm columns", "Review cleaning", "Retention results", "Budget scenario", "Insights"]
 
 PILL_TEXT = {
     "high": "High confidence",

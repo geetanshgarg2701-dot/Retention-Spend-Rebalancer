@@ -479,27 +479,28 @@ def ai_suggest(df: pd.DataFrame, ai_fn: AIFunction) -> Optional[dict[str, Option
     return parse_ai_response(reply, headers)
 
 
-def gemini_ai_function() -> Optional[AIFunction]:
+def gemini_ai_function(json_mode: bool = True) -> Optional[AIFunction]:
     """Build the real model call, or return None when no key or model is configured.
 
-    The key comes from the environment only. The model name comes from GEMINI_MODEL.
+    The key and model come from src.aiconfig, which reads the environment, a local .env file or
+    Streamlit secrets. json_mode asks for a JSON reply, and False asks for plain text.
     """
-    key = os.environ.get("GEMINI_API_KEY")
-    model = os.environ.get("GEMINI_MODEL")
-    if not key or not model or key == "your-key-here":
+    from src.aiconfig import get_settings
+
+    key, model = get_settings()
+    if not key or not model:
         return None
     try:
         from google import genai
     except ImportError:
         return None
     client = genai.Client(api_key=key)
+    config = {"temperature": 0}
+    if json_mode:
+        config["response_mime_type"] = "application/json"
 
     def call(prompt: str) -> str:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config={"response_mime_type": "application/json", "temperature": 0},
-        )
+        response = client.models.generate_content(model=model, contents=prompt, config=config)
         return response.text
 
     return call

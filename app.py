@@ -11,6 +11,8 @@ from src.mapper import FIELD_HELP, FIELD_LABELS, FIELDS, REQUIRED_FIELDS, gemini
 from src.metrics import (
     DEFAULT_WINDOW_DAYS, SEGMENT_ORDER, SEGMENT_RULES, WINDOW_CHOICES, monthly_orders, payback_progress, retention_report,
 )
+from src import aiconfig, askdata
+from src import insights as ins
 from src import scenario as sc
 from src.sample_data import DEFAULT_PATH, SYNTHETIC_NOTICE, generate_orders
 
@@ -24,9 +26,10 @@ LINE_CHOICES = {
     "Add the line values together": "sum",
     "Use the first line value, for exports where every line repeats the order total": "first",
 }
-SESSION_PREFIXES = ("map_", "mapres_", "opt_")
+SESSION_PREFIXES = ("map_", "mapres_", "opt_", "ins_")
 SESSION_KEYS = (
     "dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs", "scenario_inputs",
+    "scenario_result", "ai_budget",
 )
 
 st.set_page_config(page_title="Retention spend rebalancer", layout="wide")
@@ -114,7 +117,9 @@ def privacy_note() -> None:
         "Columns that look personal, such as names, phones and addresses, send the column name only. "
         "Order rows and customer data are never sent. "
         "On the free Gemini tier, Google may use what is sent to improve its products, "
-        "and people may review it. You can turn AI matching off at any time."
+        "and people may review it. If you use the AI features on the insights screen, only the calculated figures shown "
+        "there go to Gemini, plus the column names and your own question if you ask one. Query results never go back "
+        "to the model. You can turn AI off at any time."
     )
 
 
@@ -142,7 +147,7 @@ def stage_columns() -> None:
     if ds["synthetic"]:
         st.info(SYNTHETIC_NOTICE)
 
-    ai_available = gemini_ai_function() is not None
+    ai_available = aiconfig.ai_available()
     use_ai = st.toggle(
         "Use AI to suggest column matches", value=ai_available, disabled=not ai_available, key="use_ai",
         help="Sends only column names and up to three masked sample values per column.",
@@ -642,6 +647,7 @@ def stage_scenario() -> None:
         )
     idx = int(shift - low)
     before, after = sc.evaluate(inputs, 0.0), sc.evaluate(inputs, shift / 100)
+    st.session_state["scenario_result"] = ins.scenario_facts(inputs, sim, int(shift), horizon, observed["basis"])
 
     cols = st.columns(4)
     cols[0].metric(
@@ -679,6 +685,128 @@ def stage_scenario() -> None:
     with st.expander("What this cannot tell you", expanded=True):
         for line in sc.CAVEATS:
             st.write(line)
+    if st.button("Continue to insights", key="to_insights", type="primary"):
+        st.session_state["stage"] = 6
+        st.rerun()
+    privacy_note()
+
+
+# ------------------------------------------------------------------ stage 6
+
+def _digest(value) -> str:
+    import hashlib
+    import json
+
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def _ai_functions(use_ai: bool, budget):
+    """Text and JSON model calls that share one call budget, or None for both when AI is off."""
+    if not use_ai:
+        return None, None
+    text_fn, json_fn = gemini_ai_function(json_mode=False), gemini_ai_function(json_mode=True)
+    if text_fn is None or json_fn is None:
+        return None, None
+    return ins.with_budget(text_fn, budget), ins.with_budget(json_fn, budget)
+
+
+def stage_insights() -> None:
+    import json
+
+    ds = st.session_state["dataset"]
+    frame = st.session_state["clean"].frame
+    retention = st.session_state.get("retention_inputs") or {"window": DEFAULT_WINDOW_DAYS, "cost": None, "margin": None}
+    st.subheader("Insights")
+    if st.button("Back to the budget scenario", key="back_to_scenario"):
+        st.session_state["stage"] = 5
+        st.rerun()
+    if ds["synthetic"]:
+        st.info(SYNTHETIC_NOTICE)
+    st.html(ui.tags_html(["Code does the numbers", "AI helps with the words", "Every figure is checked"]))
+    st.write(
+        "A plain summary, ideas for each customer group, and a way to ask your own questions. "
+        "The AI never calculates anything. Each figure it writes must match one the app already calculated, "
+        "or the text is thrown away and the app's own text is shown."
+    )
+
+    ai_ok = aiconfig.ai_available()
+    use_ai = st.toggle("Use AI for these features", value=ai_ok, disabled=not ai_ok, key="insights_ai",
+                       help="Sends only the figures shown under Exactly what is sent, and your own question if you ask one.")
+    if not ai_ok:
+        st.caption("AI is off because no Gemini key is set. The app's own summary, ideas and ready-made questions still work.")
+    budget = st.session_state.setdefault("ai_budget", ins.CallBudget())
+    if ai_ok and use_ai:
+        st.caption(f"AI calls used this session: {budget.used} of {budget.limit}. The free Gemini tier is shared, so the app caps each session.")
+    text_fn, json_fn = _ai_functions(use_ai, budget)
+    can_call = text_fn is not None and budget.left > 0
+
+    report = retention_report(frame, window_days=retention["window"], cost_to_win=retention["cost"], margin_pct=retention["margin"])
+    facts = ins.build_facts(report, monthly_orders(frame), retention["window"], retention["cost"], st.session_state.get("scenario_result"))
+    key = _digest(facts)
+    summary_tab, ideas_tab, ask_tab = st.tabs(["Summary", "Segment ideas", "Ask your data"])
+
+    with summary_tab:
+        cached = st.session_state.get(f"ins_summary_{key}")
+        result = cached or ins.TextResult(ins.template_summary(facts), "app", "Written by the app from your results.")
+        st.write(result.text)
+        st.caption(result.note)
+        if st.button("Write an AI summary", key="gen_summary", disabled=not can_call):
+            with st.spinner("Writing"):
+                st.session_state[f"ins_summary_{key}"] = ins.generate_summary(facts, text_fn)
+            st.rerun()
+        with st.expander("Exactly what is sent to the AI"):
+            st.write("Only these calculated figures. No customer id, email, order row or order value from your file.")
+            st.code(json.dumps(facts, indent=2, sort_keys=True), language="json")
+
+    with ideas_tab:
+        segs = ins.segment_facts(report)
+        seg_key = _digest(segs)
+        cached_ideas = st.session_state.get(f"ins_ideas_{seg_key}") or ins.template_ideas()
+        st.caption(cached_ideas.note)
+        for name in SEGMENT_ORDER:
+            st.markdown(f"**{name}**, customers who {ins.SEGMENT_DESCRIPTIONS[name]}")
+            for idea in cached_ideas.ideas[name]:
+                st.write(f"- {idea}")
+        st.caption("These are ideas to test, not predictions.")
+        if st.button("Get AI ideas", key="gen_ideas", disabled=not (json_fn is not None and budget.left > 0)):
+            with st.spinner("Thinking"):
+                st.session_state[f"ins_ideas_{seg_key}"] = ins.generate_ideas(segs, json_fn)
+            st.rerun()
+
+    with ask_tab:
+        st.write("Pick a ready-made question, which needs no AI, or type your own.")
+        preset = st.selectbox("Ready-made questions", list(askdata.PRESETS), key="ins_preset")
+        if st.button("Run the ready-made question", key="run_preset"):
+            try:
+                result = askdata.run_preset(frame, preset)
+                st.session_state["ins_ask"] = {"title": preset, "result": result, "error": None}
+            except askdata.AskError as err:
+                st.session_state["ins_ask"] = {"title": preset, "result": None, "error": str(err)}
+        question = st.text_input("Or ask your own question", max_chars=askdata.MAX_QUESTION_CHARS, key="ins_question",
+                                 placeholder="For example: which month had the most orders?", disabled=json_fn is None)
+        st.caption(
+            "Your question and the column names go to Gemini. No order data does, and the answer is never sent back. "
+            "Do not type customer names or emails."
+        )
+        if st.button("Ask with AI", key="run_ask", disabled=not (json_fn is not None and budget.left > 0)):
+            try:
+                answer = askdata.ask(frame, question, json_fn)
+                st.session_state["ins_ask"] = {"title": answer.title, "result": answer.result, "error": None}
+            except askdata.AskError as err:
+                st.session_state["ins_ask"] = {"title": "Your question", "result": None, "error": str(err)}
+        shown = st.session_state.get("ins_ask")
+        if shown:
+            if shown["error"]:
+                st.error(shown["error"])
+            else:
+                st.markdown(f"**{shown['title']}**")
+                st.dataframe(shown["result"].table, hide_index=True, width="stretch")
+                note = f"{len(shown['result'].table):,} rows from your cleaned orders, computed by the database."
+                if shown["result"].truncated:
+                    note += f" Only the first {askdata.MAX_ROWS:,} rows are shown."
+                st.caption(note)
+                with st.expander("The query that ran"):
+                    st.code(shown["result"].sql, language="sql")
     privacy_note()
 
 
@@ -691,7 +819,7 @@ def main() -> None:
     if "dataset" not in st.session_state:
         stage = 1
     ui.stepper(stage)
-    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results, 5: stage_scenario}[stage]()
+    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results, 5: stage_scenario, 6: stage_insights}[stage]()
 
 
 main()

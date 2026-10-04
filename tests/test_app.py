@@ -9,9 +9,14 @@ APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
 @pytest.fixture(autouse=True)
-def no_ai_key(monkeypatch):
+def no_ai_key(monkeypatch, tmp_path):
+    """Tests never see a real key and never call the model, even when a real .env exists."""
+    from src import aiconfig
+
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(aiconfig, "ENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setattr(aiconfig, "_secret", lambda name: None)
 
 
 def fresh():
@@ -242,6 +247,183 @@ def test_a_new_file_clears_the_scenario_inputs():
     at.button(key="back_to_columns").click().run()
     at.button(key="back_to_load").click().run()
     assert "scenario_inputs" not in at.session_state
+
+
+class FakeAI:
+    """Answers by the kind of prompt, and records every prompt so tests can check what would have been sent."""
+
+    def __init__(self):
+        self.prompts = []
+        self.summary = None
+        self.ideas = None
+        self.sql = None
+
+    def __call__(self, prompt):
+        import json
+        from src.metrics import SEGMENT_ORDER
+
+        self.prompts.append(prompt)
+        if "short summary" in prompt:
+            facts = json.loads(prompt.split("FACTS as JSON:\n", 1)[1])
+            return self.summary or f"Your file has {facts['orders']:,} orders from {facts['customers']:,} customers."
+        if "marketing ideas" in prompt:
+            return self.ideas or json.dumps({n: [f"Try a gentle message for the {n} group."] for n in SEGMENT_ORDER})
+        if "DuckDB SQL" in prompt:
+            return self.sql or json.dumps({"title": "Order count", "sql": "SELECT count(*) AS n FROM orders"})
+        return "{}"  # the column matching prompt: no suggestions
+
+
+@pytest.fixture
+def fake_ai(monkeypatch):
+    ai = FakeAI()
+    monkeypatch.setattr("src.aiconfig.ai_available", lambda: True)
+    monkeypatch.setattr("src.mapper.gemini_ai_function", lambda json_mode=True: ai)
+    return ai
+
+
+def to_insights():
+    at = fill_scenario(to_scenario())
+    at.button(key="to_insights").click().run()
+    assert not at.exception
+    return at
+
+
+def insight_prompts(ai):
+    return [p for p in ai.prompts if "short summary" in p or "marketing ideas" in p or "DuckDB SQL" in p]
+
+
+def test_insights_screen_works_with_ai_off_and_still_has_summary_ideas_and_questions():
+    at = to_insights()
+    assert at.session_state["stage"] == 6
+    assert any("Insights" in s.value for s in at.subheader)
+    assert any("AI is off because no Gemini key is set" in c.value for c in at.caption)
+    assert at.button(key="gen_summary").disabled and at.button(key="gen_ideas").disabled and at.button(key="run_ask").disabled
+    text = " ".join(m.value for m in at.markdown)
+    assert "Your file has" in text and "Written by the app from your results." in " ".join(c.value for c in at.caption)
+    assert "Champions" in text and "ideas to test, not predictions" in " ".join(c.value for c in at.caption)
+
+
+def test_a_ready_made_question_runs_without_ai():
+    at = to_insights()
+    at.selectbox(key="ins_preset").select("Orders and revenue by month")
+    at.button(key="run_preset").click().run()
+    assert not at.exception and not at.error
+    table = at.dataframe[-1].value
+    assert list(table.columns) == ["month", "orders", "revenue"] and int(table["orders"].sum()) == at.session_state["clean"].stats["orders"]
+    assert any("computed by the database" in c.value for c in at.caption)
+
+
+def test_an_ai_summary_is_shown_after_it_passes_the_check_and_is_not_asked_twice(fake_ai):
+    at = to_insights()
+    assert not at.button(key="gen_summary").disabled
+    at.button(key="gen_summary").click().run()
+    assert not at.exception
+    orders = at.session_state["clean"].stats["orders"]
+    assert any(f"Your file has {orders:,} orders" in m.value for m in at.markdown)
+    assert any("Every figure was checked" in c.value for c in at.caption)
+    calls = len(insight_prompts(fake_ai))
+    at.run()  # a plain rerun reuses the saved summary
+    assert len(insight_prompts(fake_ai)) == calls == 1
+    assert at.session_state["ai_budget"].used == 1
+
+
+def test_an_ai_summary_with_an_invented_figure_is_discarded_and_the_app_text_is_shown(fake_ai):
+    fake_ai.summary = "Revenue grew 999% last year, and customers will definitely return."
+    at = to_insights()
+    at.button(key="gen_summary").click().run()
+    assert not at.exception
+    assert any("discarded" in c.value for c in at.caption)
+    assert not any("999" in m.value for m in at.markdown)
+    assert any("Your file has" in m.value for m in at.markdown)
+
+
+def test_ai_ideas_are_checked_and_bad_ones_are_left_out(fake_ai):
+    import json
+    from src.metrics import SEGMENT_ORDER
+
+    ideas = {n: ["Offer a small thank you."] for n in SEGMENT_ORDER}
+    ideas["Loyal"] = ["Offer a small thank you.", "Give them 77% off every order."]
+    fake_ai.ideas = json.dumps(ideas)
+    at = to_insights()
+    at.button(key="gen_ideas").click().run()
+    assert not at.exception
+    text = " ".join(m.value for m in at.markdown)
+    assert "Offer a small thank you." in text and "77%" not in text
+    assert any("did not pass the check" in c.value for c in at.caption)
+
+
+def test_asking_your_own_question_runs_a_checked_query_locally(fake_ai):
+    at = to_insights()
+    at.text_input(key="ins_question").set_value("How many orders are there?").run()
+    at.button(key="run_ask").click().run()
+    assert not at.exception and not at.error
+    assert at.dataframe[-1].value["n"].tolist() == [at.session_state["clean"].stats["orders"]]
+    assert any("Order count" in m.value for m in at.markdown)
+    assert any("SELECT count(*)" in c.value for c in at.code)
+
+
+def test_a_dangerous_ai_query_is_refused_with_a_plain_message(fake_ai):
+    import json
+
+    fake_ai.sql = json.dumps({"title": "Oops", "sql": "DROP TABLE orders"})
+    at = to_insights()
+    at.text_input(key="ins_question").set_value("Delete everything").run()
+    at.button(key="run_ask").click().run()
+    assert not at.exception
+    assert any("Only SELECT queries are allowed" in e.value for e in at.error)
+    # The data is untouched, and the next ready-made question still works.
+    at.button(key="run_preset").click().run()
+    assert not at.error and at.dataframe[-1].value is not None
+
+
+def test_no_customer_data_ever_appears_in_a_prompt(fake_ai):
+    at = to_insights()
+    at.button(key="gen_summary").click().run()
+    at.button(key="gen_ideas").click().run()
+    at.text_input(key="ins_question").set_value("Which month had the most orders?").run()
+    at.button(key="run_ask").click().run()
+    assert len(insight_prompts(fake_ai)) == 3
+    everything = "\n".join(fake_ai.prompts)  # includes the earlier column matching prompt
+    for leak in ("@example.com", "customer0", "Customer 0", "555-01"):  # emails, names and phones never go out
+        assert leak not in everything, leak
+    # The Insights prompts carry calculated figures and column names only. Not even product names or order numbers.
+    for prompt in insight_prompts(fake_ai):
+        for leak in ("Sample item", "#10", "#37", "customer0", "Customer 0", "@"):
+            assert leak not in prompt, leak
+
+
+def test_the_session_call_cap_disables_the_ai_buttons(fake_ai):
+    from src import insights as ins
+
+    at = to_insights()
+    at.session_state["ai_budget"] = ins.CallBudget(limit=1, used=1)
+    at.run()
+    assert at.button(key="gen_summary").disabled and at.button(key="gen_ideas").disabled and at.button(key="run_ask").disabled
+    assert any("1 of 1" in c.value for c in at.caption)
+
+
+def test_ai_failures_never_crash_the_screen(monkeypatch, fake_ai):
+    def boom(prompt):
+        if "short summary" in prompt:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED some-secret-detail")
+        return fake_ai(prompt)
+
+    monkeypatch.setattr("src.mapper.gemini_ai_function", lambda json_mode=True: boom)
+    at = to_insights()
+    at.button(key="gen_summary").click().run()
+    assert not at.exception
+    assert any("limit may be used up" in c.value for c in at.caption)
+    assert not any("some-secret-detail" in c.value for c in at.caption) and not any("some-secret-detail" in m.value for m in at.markdown)
+
+
+def test_a_new_file_clears_the_insights_state(fake_ai):
+    at = to_insights()
+    at.button(key="gen_summary").click().run()
+    assert at.session_state["ai_budget"].used == 1
+    for key in ("back_to_scenario", "back_to_results", "back_to_review", "back_to_columns", "back_to_load"):
+        at.button(key=key).click().run()
+    assert "ai_budget" not in at.session_state and "scenario_result" not in at.session_state
+    assert "ins_summary" not in repr(at.session_state) and "ins_ideas" not in repr(at.session_state)
 
 
 def test_missing_required_column_blocks_the_confirm_button():
