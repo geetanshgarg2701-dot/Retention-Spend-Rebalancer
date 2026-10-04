@@ -75,7 +75,7 @@ Stats: orders, customers, first and last date, repeat customer share, total reve
 A seeded generator for a synthetic export of about 1,500 customers over 24 months, with realistic repeat decay and a loyal group. Make it messy on purpose: mixed date formats and time zone suffixes, currency symbols and thousands commas, refund and void statuses, blank customer emails, a few unreadable dates, a few zero-value orders, and extra noise columns. Write it to data/synthetic_orders_messy.csv. Every place it appears must say it is synthetic.
 
 ### app.py
-Streamlit flow in three stages. 1: upload a CSV or load the synthetic sample. 2: confirm columns, with suggestions, confidence, reasons, and a date-format and line-item options panel. 3: review the cleaning, with metrics, the steps table, warnings, a preview, and a download of the clean CSV. Store state per dataset so a new file resets the flow. Read files as text with blank cells kept as empty strings. Fail with a plain message on empty files, parse errors, and files over 500,000 rows.
+Streamlit flow in three stages. 1: upload a CSV or load the synthetic sample. 2: confirm columns, with suggestions, confidence, reasons, and a date-format and line-item options panel. 3: review the cleaning, with metrics, the steps table, warnings, a preview, and a download of the clean CSV. Store state per dataset so a new file resets the flow. Read files as text with blank cells kept as empty strings. Fail with a plain message on empty files, parse errors, and files over 200,000 rows. The cap was lowered from 500,000 on 2026-10-04 after measuring memory on a large file.
 
 ### tests
 - Parsing: money formats, time zone stripping, day or month inference.

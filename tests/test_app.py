@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -424,6 +425,162 @@ def test_a_new_file_clears_the_insights_state(fake_ai):
         at.button(key=key).click().run()
     assert "ai_budget" not in at.session_state and "scenario_result" not in at.session_state
     assert "ins_summary" not in repr(at.session_state) and "ins_ideas" not in repr(at.session_state)
+
+
+def count_calls(monkeypatch, target, name):
+    """Wrap a function the app imports by name, and count how often the app calls it."""
+    import importlib
+
+    module = importlib.import_module(target)
+    original = getattr(module, name)
+    calls = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, wrapper)
+    return calls
+
+
+def test_the_retention_report_is_not_recalculated_on_every_click(monkeypatch):
+    calls = count_calls(monkeypatch, "src.metrics", "retention_report")
+    at = to_results()
+    assert len(calls) == 1
+    at.run()
+    at.run()
+    assert len(calls) == 1  # plain reruns reuse the saved report
+    at.selectbox(key="opt_sample_window").select(60).run()
+    assert len(calls) == 2  # a changed input recalculates once
+    at.number_input(key="opt_sample_cost").set_value(30.0).run()
+    assert len(calls) == 3
+
+
+def test_the_scenario_and_insights_screens_reuse_the_saved_report(monkeypatch):
+    calls = count_calls(monkeypatch, "src.metrics", "retention_report")
+    at = to_insights()
+    assert len(calls) == 1  # calculated on the results screen, then reused on the insights screen
+    at.button(key="back_to_scenario").click().run()
+    at.button(key="back_to_results").click().run()
+    assert len(calls) == 1
+
+
+def test_cleaning_again_invalidates_the_saved_results(monkeypatch):
+    calls = count_calls(monkeypatch, "src.metrics", "retention_report")
+    at = to_results()
+    assert len(calls) == 1
+    at.button(key="back_to_review").click().run()
+    at.button(key="back_to_columns").click().run()
+    at.button(key="confirm_columns").click().run()
+    at.button(key="to_results").click().run()
+    assert at.session_state["clean_n"] == 2 and len(calls) == 2  # new cleaned data means a fresh report
+
+
+def test_moving_the_scenario_slider_does_not_rerun_the_simulation(monkeypatch):
+    calls = count_calls(monkeypatch, "src.scenario", "simulate")
+    at = fill_scenario(to_scenario())
+    assert len(calls) == 1
+    at.slider[0].set_value(0).run()
+    at.slider[0].set_value(5).run()
+    assert len(calls) == 1
+    at.number_input(key="opt_sample_s_exponent").set_value(0.9).run()
+    assert len(calls) == 2  # a changed assumption simulates once more
+
+
+def test_the_clean_csv_is_built_only_on_demand(monkeypatch):
+    original = pd.DataFrame.to_csv
+    built = []
+
+    def spy(self, *args, **kwargs):
+        built.append(len(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", spy)
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    at.button(key="confirm_columns").click().run()
+    assert at.session_state["stage"] == 3 and not at.exception
+    at.run()
+    assert built == []  # the review screen rendered more than once without building the file
+
+
+def test_an_unexpected_error_shows_a_friendly_message_and_never_leaks_details(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("RSR_RAISE_ERRORS", "0")
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("secret-detail-123 customer@example.com")
+
+    monkeypatch.setattr("src.metrics.retention_report", explode)
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    at.button(key="confirm_columns").click().run()
+    with caplog.at_level(logging.ERROR, logger="rsr"):
+        at.button(key="to_results").click().run()
+    assert not at.exception  # the app handled it, so no traceback reached the page
+    assert any("Something went wrong while showing this screen" in e.value for e in at.error)
+    page = " ".join(e.value for e in at.error) + " ".join(m.value for m in at.markdown)
+    assert "secret-detail-123" not in page and "customer@example.com" not in page
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in logged and "screen 4" in logged
+    assert "secret-detail-123" not in logged and "customer@example.com" not in logged
+    at.button(key="error_reset").click().run()
+    assert "dataset" not in at.session_state and at.button(key="load_sample") is not None
+
+
+def test_real_errors_are_raised_in_tests_so_they_cannot_be_missed(monkeypatch):
+    def explode(*args, **kwargs):
+        raise RuntimeError("visible in tests")
+
+    monkeypatch.setattr("src.metrics.retention_report", explode)
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    at.button(key="confirm_columns").click().run()
+    at.button(key="to_results").click().run()
+    assert at.exception  # RSR_RAISE_ERRORS is on in the test suite
+
+
+def test_the_shared_daily_ai_limit_pauses_ai_for_everyone_with_a_clear_message(monkeypatch, fake_ai):
+    from src import insights as ins
+
+    monkeypatch.setattr(ins, "GLOBAL_DAILY", ins.DailyBudget(limit=0))
+    at = to_insights()
+    assert any("shared AI limit for today has been reached" in c.value for c in at.caption)
+    assert at.button(key="gen_summary").disabled and at.button(key="gen_ideas").disabled and at.button(key="run_ask").disabled
+    assert insight_prompts(fake_ai) == []
+    # Ready-made questions and the app's own summary still work.
+    at.button(key="run_preset").click().run()
+    assert not at.error and "Your file has" in " ".join(m.value for m in at.markdown)
+
+
+def test_column_matching_also_counts_against_the_shared_daily_limit(monkeypatch, fake_ai):
+    from src import insights as ins
+
+    daily = ins.DailyBudget(limit=5)
+    monkeypatch.setattr(ins, "GLOBAL_DAILY", daily)
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    assert not at.exception and daily.used == 1  # the AI column matching call was counted
+    monkeypatch.setattr(ins, "GLOBAL_DAILY", ins.DailyBudget(limit=0))
+    at2 = fresh()
+    at2.button(key="load_sample").click().run()
+    assert not at2.exception  # when the day is used up, matching falls back to the rules
+    assert any("rules only" in w.value for w in at2.warning)
+
+
+def test_the_public_settings_hide_the_toolbar_and_error_details():
+    import tomllib
+
+    with open(".streamlit/config.toml", "rb") as f:
+        client = tomllib.load(f)["client"]
+    assert client["toolbarMode"] == "viewer" and client["showErrorDetails"] == "none"
+
+
+def test_the_privacy_note_says_what_happens_on_a_hosted_server():
+    at = fresh()
+    text = " ".join(c.value for c in at.caption)
+    assert "held in the server's memory for the session only" in text and "does not write it to disk or a database" in text
 
 
 def test_missing_required_column_blocks_the_confirm_button():

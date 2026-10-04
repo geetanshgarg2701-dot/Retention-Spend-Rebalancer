@@ -39,3 +39,14 @@ def test_handles_bom_semicolons_and_cp1252():
 def test_bad_files_get_plain_messages(name, data, kwargs, message):
     with pytest.raises(LoadError, match=message):
         read_upload(name, data, **kwargs)
+
+
+def test_the_default_row_cap_is_two_hundred_thousand_and_is_enforced():
+    from src.loading import MAX_ROWS
+
+    assert MAX_ROWS == 200_000
+    just_over = b"a,b\n" + b"1,2\n" * (MAX_ROWS + 1)
+    with pytest.raises(LoadError, match="more than 200,000 rows"):
+        read_upload("big.csv", just_over)
+    exactly = b"a,b\n" + b"1,2\n" * MAX_ROWS
+    assert len(read_upload("ok.csv", exactly)) == MAX_ROWS

@@ -32,6 +32,12 @@ def _secret(name: str) -> Optional[str]:
     return str(value) if value else None
 
 
+def get_value(name: str) -> Optional[str]:
+    """Any setting by name, from the environment, then a local .env file, then Streamlit secrets."""
+    load_env()
+    return os.environ.get(name) or _secret(name)
+
+
 def get_settings() -> tuple[Optional[str], Optional[str]]:
     """The key and model name, or None for either one that is missing or still the placeholder."""
     load_env()

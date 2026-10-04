@@ -52,6 +52,36 @@ def test_streamlit_secrets_are_the_last_fallback(monkeypatch):
     assert aiconfig.get_settings() == ("fromsecret", "secret-model")
 
 
+def test_any_setting_is_read_from_the_environment_then_the_env_file_then_secrets(monkeypatch, tmp_path):
+    assert aiconfig.get_value("AI_DAILY_LIMIT") is None
+    monkeypatch.setattr(aiconfig, "_secret", lambda name: "from-secrets" if name == "AI_DAILY_LIMIT" else None)
+    assert aiconfig.get_value("AI_DAILY_LIMIT") == "from-secrets"
+    path = write_env(tmp_path / ".env", "AI_DAILY_LIMIT=from-file\n")
+    monkeypatch.setattr(aiconfig, "ENV_PATH", path)
+    assert aiconfig.get_value("AI_DAILY_LIMIT") == "from-file"
+    monkeypatch.setenv("AI_DAILY_LIMIT", "from-env")
+    assert aiconfig.get_value("AI_DAILY_LIMIT") == "from-env"
+    monkeypatch.delenv("AI_DAILY_LIMIT")
+    assert aiconfig.get_value("AI_DAILY_LIMIT") == "from-file"  # dotenv loaded it into the environment above
+
+
+def test_the_daily_ai_limit_can_come_from_streamlit_secrets(monkeypatch):
+    from src.insights import DailyBudget
+
+    monkeypatch.setattr(aiconfig, "_secret", lambda name: "12" if name == "AI_DAILY_LIMIT" else None)
+    assert DailyBudget().limit == 12
+
+
+def test_the_secrets_example_contains_only_placeholders_and_is_not_ignored_by_git():
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent
+    example = (root / ".streamlit" / "secrets.toml.example").read_text(encoding="utf-8")
+    assert 'GEMINI_API_KEY = "your-key-here"' in example and "AIza" not in example
+    ignore = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".streamlit/secrets.toml" in ignore and "secrets.toml.example" not in " ".join(ignore)
+
+
 def test_a_missing_env_file_is_harmless():
     assert aiconfig.load_env() is False
 

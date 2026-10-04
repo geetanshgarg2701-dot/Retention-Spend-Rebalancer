@@ -1,6 +1,10 @@
 """Retention spend rebalancer: load an order export, confirm columns, review cleaning, see retention results."""
 from __future__ import annotations
 
+import dataclasses
+import logging
+import os
+
 import pandas as pd
 import streamlit as st
 
@@ -29,7 +33,7 @@ LINE_CHOICES = {
 SESSION_PREFIXES = ("map_", "mapres_", "opt_", "ins_")
 SESSION_KEYS = (
     "dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs", "scenario_inputs",
-    "scenario_result", "ai_budget",
+    "scenario_result", "ai_budget", "clean_n",
 )
 
 st.set_page_config(page_title="Retention spend rebalancer", layout="wide")
@@ -49,6 +53,34 @@ def set_dataset(name: str, raw: pd.DataFrame, source: str, dataset_id: str) -> N
         "id": dataset_id, "name": name, "raw": raw, "source": source, "synthetic": source == "sample",
     }
     st.session_state["stage"] = 2
+
+
+def _digest(value) -> str:
+    import hashlib
+    import json
+
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def session_cached(name: str, parts: tuple, compute):
+    """Keep the latest result of a heavy calculation for this session, keyed by what it depends on.
+
+    Widget clicks rerun the whole page, so without this a big file would be recalculated on every click.
+    One result is kept per name, so memory stays bounded. The keys start with ins_, so a new file clears them.
+    """
+    slot = f"ins_cache_{name}"
+    digest = _digest(list(parts))
+    held = st.session_state.get(slot)
+    if held and held[0] == digest:
+        return held[1]
+    value = compute()
+    st.session_state[slot] = (digest, value)
+    return value
+
+
+def clean_version() -> int:
+    """Changes every time the orders are cleaned again, so cached results for old data are never reused."""
+    return int(st.session_state.get("clean_n", 0))
 
 
 def load_sample() -> pd.DataFrame:
@@ -111,7 +143,8 @@ def stage_load() -> None:
 
 def privacy_note() -> None:
     st.caption(
-        "Privacy: your file is processed in this session and is not stored. "
+        "Privacy: your file is processed in this session and is not stored. On a hosted server it is held in the "
+        "server's memory for the session only, and the app does not write it to disk or a database. "
         "If AI matching is on, only column names and up to three masked sample values per column "
         "go to the Gemini API, with emails and phone-like numbers replaced by placeholders. "
         "Columns that look personal, such as names, phones and addresses, send the column name only. "
@@ -128,7 +161,8 @@ def privacy_note() -> None:
 def get_mapping(ds: dict, use_ai: bool):
     key = f"mapres_{ds['id']}_{use_ai}"
     if key not in st.session_state:
-        ai_fn = gemini_ai_function() if use_ai else None
+        raw_ai = gemini_ai_function() if use_ai else None
+        ai_fn = ins.with_daily(raw_ai) if raw_ai is not None else None  # column matching counts against the shared daily cap
         with st.spinner("Matching columns"):
             st.session_state[key] = map_columns(ds["raw"], ai_fn=ai_fn)
     return st.session_state[key]
@@ -212,15 +246,17 @@ def stage_columns() -> None:
             "line_item_mode": LINE_CHOICES[line_label], "multiply_quantity": multiply,
         }
         try:
-            outcome = clean_orders(
-                raw, chosen, dayfirst=options["dayfirst"],
-                line_item_mode=options["line_item_mode"], multiply_quantity=options["multiply_quantity"],
-            )
+            with st.spinner(f"Cleaning {len(raw):,} rows"):
+                outcome = clean_orders(
+                    raw, chosen, dayfirst=options["dayfirst"],
+                    line_item_mode=options["line_item_mode"], multiply_quantity=options["multiply_quantity"],
+                )
         except ValueError as err:
             st.error(str(err))
             return
         st.session_state["confirmed"] = options
         st.session_state["clean"] = outcome
+        st.session_state["clean_n"] = clean_version() + 1
         st.session_state["stage"] = 3
         st.rerun()
     privacy_note()
@@ -263,11 +299,12 @@ def stage_review() -> None:
     if stats["orders"]:
         st.markdown("**Preview of the clean orders**")
         st.dataframe(frame.head(100), hide_index=True, width="stretch")
-        csv = frame.to_csv(index=False, float_format="%.2f", date_format="%Y-%m-%d %H:%M:%S")
+        # The file is built only when the button is clicked, so a big file is not rebuilt on every page rerun.
         st.download_button(
-            "Download clean CSV", csv.encode("utf-8"),
+            "Download clean CSV",
+            lambda: frame.to_csv(index=False, float_format="%.2f", date_format="%Y-%m-%d %H:%M:%S").encode("utf-8"),
             file_name="synthetic_clean_orders.csv" if ds["synthetic"] else "clean_orders.csv",
-            mime="text/csv", key="download_clean",
+            mime="text/csv", key="download_clean", on_click="ignore",
         )
         if st.button("Continue to retention results", key="to_results", type="primary"):
             st.session_state["stage"] = 4
@@ -286,7 +323,9 @@ def command_row(frame: pd.DataFrame, report) -> None:
 
     The first two use Streamlit's own sparkline, which the HTML sanitizer cannot strip.
     """
-    monthly = monthly_orders(frame)
+    monthly = session_cached(
+        "monthly", (st.session_state["dataset"]["id"], clean_version()), lambda: monthly_orders(frame)
+    )
     pooled = report.cohorts.average.iloc[1:]  # month 0 is always 100 percent, so the line starts at month 1
     segments = [(name, int(report.segments.loc[name, "customers"])) for name in SEGMENT_ORDER]
     cost = st.session_state["retention_inputs"]["cost"]
@@ -364,7 +403,10 @@ def stage_results() -> None:
 
     try:
         with st.spinner("Calculating"):
-            report = retention_report(frame, window_days=window, cost_to_win=cost, margin_pct=margin)
+            report = session_cached(
+                "report", (ds["id"], clean_version(), window, cost, margin),
+                lambda: retention_report(frame, window_days=window, cost_to_win=cost, margin_pct=margin),
+            )
     except ValueError as err:
         st.error(str(err))
         return
@@ -580,7 +622,10 @@ def stage_scenario() -> None:
                                    help="What it costs you to win back one customer who would not have ordered again. "
                                         "Orders cannot measure this, so it is your estimate. The ranges below let you say how unsure you are.")
 
-    observed = sc.observed_inputs(frame, horizon, retention.get("margin"))
+    observed = session_cached(
+        "observed", (ds["id"], clean_version(), horizon, retention.get("margin")),
+        lambda: sc.observed_inputs(frame, horizon, retention.get("margin")),
+    )
     with st.expander("Advanced assumptions", expanded=False):
         f, g, h = st.columns(3)
         exponent = f.number_input("Diminishing returns exponent", min_value=sc.MIN_EXPONENT, max_value=1.0,
@@ -628,7 +673,7 @@ def stage_scenario() -> None:
     try:
         with st.spinner("Simulating"):
             ranges = sc.ranges_from_pct(inputs, uncertainty / 100)
-            sim = sc.simulate(inputs, ranges)
+            sim = session_cached("sim", (dataclasses.astuple(inputs), uncertainty), lambda: sc.simulate(inputs, ranges))
     except ValueError as err:
         st.error(str(err))
         return
@@ -693,13 +738,6 @@ def stage_scenario() -> None:
 
 # ------------------------------------------------------------------ stage 6
 
-def _digest(value) -> str:
-    import hashlib
-    import json
-
-    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:12]
-
-
 def _ai_functions(use_ai: bool, budget):
     """Text and JSON model calls that share one call budget, or None for both when AI is off."""
     if not use_ai:
@@ -738,10 +776,18 @@ def stage_insights() -> None:
     if ai_ok and use_ai:
         st.caption(f"AI calls used this session: {budget.used} of {budget.limit}. The free Gemini tier is shared, so the app caps each session.")
     text_fn, json_fn = _ai_functions(use_ai, budget)
+    day_left = ins.GLOBAL_DAILY.left
+    if ai_ok and use_ai and day_left == 0:
+        st.caption("The shared AI limit for today has been reached, so AI is paused until tomorrow. The app's own text still works.")
+        text_fn = json_fn = None
     can_call = text_fn is not None and budget.left > 0
 
-    report = retention_report(frame, window_days=retention["window"], cost_to_win=retention["cost"], margin_pct=retention["margin"])
-    facts = ins.build_facts(report, monthly_orders(frame), retention["window"], retention["cost"], st.session_state.get("scenario_result"))
+    report = session_cached(
+        "report", (ds["id"], clean_version(), retention["window"], retention["cost"], retention["margin"]),
+        lambda: retention_report(frame, window_days=retention["window"], cost_to_win=retention["cost"], margin_pct=retention["margin"]),
+    )
+    monthly = session_cached("monthly", (ds["id"], clean_version()), lambda: monthly_orders(frame))
+    facts = ins.build_facts(report, monthly, retention["window"], retention["cost"], st.session_state.get("scenario_result"))
     key = _digest(facts)
     summary_tab, ideas_tab, ask_tab = st.tabs(["Summary", "Segment ideas", "Ask your data"])
 
@@ -819,7 +865,21 @@ def main() -> None:
     if "dataset" not in st.session_state:
         stage = 1
     ui.stepper(stage)
-    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results, 5: stage_scenario, 6: stage_insights}[stage]()
+    screens = {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results, 5: stage_scenario, 6: stage_insights}
+    try:
+        screens[stage]()
+    except Exception as err:  # Streamlit's rerun and stop signals are not Exceptions, so they pass through
+        if os.environ.get("RSR_RAISE_ERRORS") == "1":
+            raise  # tests and local debugging see the real error
+        # Log the kind of error and the screen only. The message can contain values from the user's file.
+        logging.getLogger("rsr").error("Unhandled %s on screen %s", type(err).__name__, stage)
+        st.error(
+            "Something went wrong while showing this screen. Reload the page and try again. "
+            "If it keeps happening, start over with a new file, or try a smaller file."
+        )
+        if st.button("Start over", key="error_reset"):
+            reset_state()
+            st.rerun()
 
 
 main()

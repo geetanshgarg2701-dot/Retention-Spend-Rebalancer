@@ -282,6 +282,109 @@ def test_the_ideas_prompt_describes_segments_without_customer_data(facts):
         assert leak not in prompt
 
 
+# --------------------------------------------------------------- shared daily cap
+
+class Clock:
+    def __init__(self):
+        import datetime
+
+        self.day = datetime.date(2026, 10, 4)
+
+    def __call__(self):
+        return self.day
+
+    def next_day(self):
+        import datetime
+
+        self.day += datetime.timedelta(days=1)
+
+
+def test_the_daily_cap_counts_stops_and_resets_each_day():
+    clock = Clock()
+    daily = ins.DailyBudget(limit=2, clock=clock)
+    assert daily.left == 2
+    daily.spend()
+    daily.spend()
+    assert daily.left == 0
+    with pytest.raises(ins.AICapReached, match="shared AI limit for today"):
+        daily.spend()
+    clock.next_day()
+    assert daily.left == 2  # a new day starts the count again
+    daily.spend()
+    assert daily.left == 1
+
+
+def test_the_daily_cap_reads_its_limit_from_the_environment(monkeypatch):
+    monkeypatch.setenv("AI_DAILY_LIMIT", "7")
+    assert ins.DailyBudget().limit == 7
+    monkeypatch.setenv("AI_DAILY_LIMIT", "not a number")
+    assert ins.DailyBudget().limit == ins.DEFAULT_DAILY_LIMIT == 150
+    monkeypatch.delenv("AI_DAILY_LIMIT")
+    assert ins.DailyBudget().limit == 150
+    assert ins.DailyBudget(limit=-5).limit == 0  # a negative limit means no calls
+
+
+def test_many_threads_cannot_overspend_the_daily_cap():
+    import threading
+
+    daily = ins.DailyBudget(limit=40)
+    ok, refused = [], []
+
+    def worker():
+        try:
+            daily.spend()
+            ok.append(1)
+        except ins.AICapReached:
+            refused.append(1)
+
+    threads = [threading.Thread(target=worker) for _ in range(120)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(ok) == 40 and len(refused) == 80 and daily.used == 40
+
+
+def test_a_call_is_charged_to_the_session_and_to_the_day():
+    session, daily = ins.CallBudget(limit=5), ins.DailyBudget(limit=5)
+    ai = ins.with_budget(lambda prompt: "ok", session, daily)
+    assert ai("a") == "ok"
+    assert session.used == 1 and daily.used == 1
+
+
+def test_a_call_refused_by_the_daily_cap_is_not_charged_to_the_session():
+    session, daily = ins.CallBudget(limit=5), ins.DailyBudget(limit=0)
+    ai = ins.with_budget(lambda prompt: "ok", session, daily)
+    with pytest.raises(ins.AICapReached, match="shared AI limit"):
+        ai("a")
+    assert session.used == 0 and daily.used == 0
+
+
+def test_a_call_refused_by_the_session_cap_does_not_use_the_shared_day():
+    session, daily = ins.CallBudget(limit=0), ins.DailyBudget(limit=5)
+    with pytest.raises(ins.AICapReached, match="used its 0 AI calls"):
+        ins.with_budget(lambda prompt: "ok", session, daily)("a")
+    assert daily.used == 0
+
+
+def test_with_daily_only_charges_the_day():
+    daily = ins.DailyBudget(limit=1)
+    ai = ins.with_daily(lambda prompt: "ok", daily)
+    assert ai("a") == "ok" and daily.used == 1
+    with pytest.raises(ins.AICapReached):
+        ai("b")
+
+
+def test_the_default_shared_cap_is_used_when_none_is_given(monkeypatch):
+    shared = ins.DailyBudget(limit=1)
+    monkeypatch.setattr(ins, "GLOBAL_DAILY", shared)
+    ai = ins.with_budget(lambda prompt: "ok", ins.CallBudget(limit=5))
+    ai("a")
+    assert shared.used == 1
+    with pytest.raises(ins.AICapReached, match="shared AI limit"):
+        ai("b")
+
+
 # ---------------------------------------------------------- budget and errors
 
 def test_the_call_budget_counts_and_stops():

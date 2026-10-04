@@ -12,7 +12,7 @@ Status: Weeks 1 to 4 of a six-week build are working. You can load an order expo
 5. Try a budget scenario: enter your budget, your current split and what it costs to win and to bring back a customer, then move a slider to see the estimated change in value, the chance the move beats your current split, and the customers won and brought back. A simulation of 2,000 draws gives a range instead of one number, and an assumptions table lists every input and where it came from.
 6. Open the insights screen for a summary, ideas for each customer group and a way to ask questions of your orders.
 
-Files can have up to 500,000 rows and 25 MB. The app explains in plain words when a file is empty, is not a CSV, or cannot be parsed.
+Files can have up to 200,000 rows and 25 MB. The row limit comes from measuring memory on a large file, because the free hosting tier has limited memory. The app explains in plain words when a file is empty, is not a CSV, or cannot be parsed.
 
 ## How the numbers and the AI fit together
 Numbers come from code. Words can come from AI, and the AI never calculates a figure.
@@ -41,6 +41,9 @@ macOS or Linux:
     streamlit run app.py
 
 ## Run the tests
+The test tools are kept out of the hosted app, so install the development file first:
+
+    pip install -r requirements-dev.txt
     python -m pytest
 
 The tests cover parsing, column matching, the cleaning rules with hand-checked counts, the retention metrics and the scenario model with every figure worked out by hand, the number checker, the database guard with a long list of attack queries, the synthetic data, upload validation, and smoke tests of the app on the synthetic sample. No test can reach a real key or call the model, even when a real .env exists.
@@ -49,6 +52,22 @@ The tests cover parsing, column matching, the cleaning rules with hand-checked c
 Everything works without AI. To turn it on, give the app a Gemini key and a model name. The app looks in this order: environment variables, then a .env file in the project folder, then Streamlit secrets. Copy .env.example to .env for local runs, and use Streamlit secrets when you deploy. Check Google's current model list before choosing a model name. Without both values the AI switches stay off. Never commit the .env file, which is already ignored by git.
 
 The free Gemini tier has daily limits that are shared by everyone using the app, so each session is capped at 10 AI calls on the insights screen. When the limit is reached or a call fails, the app shows its own text and tells you why.
+
+## Deploy on Streamlit Community Cloud
+The repository is ready for it. requirements.txt pins exact versions, and the fonts in static and the sample in data are in the repo.
+
+1. At share.streamlit.io choose Create app, then pick this repository, the main branch and app.py as the main file.
+2. Open Advanced settings. Choose Python 3.12, which is what the tests ran on.
+3. In the Secrets box paste the contents of .streamlit/secrets.toml.example with your real key filled in. Never put the key in a file in the repo, and never commit .streamlit/secrets.toml.
+4. Deploy. The app gets its own address within a few minutes.
+
+Things to know before you do:
+- A private repository needs extra permission. In your Community Cloud workspace settings, open Linked accounts and authorize access to private repositories. You need admin rights on the repository.
+- An app deployed from a private repository is private to you, unless you add other people as viewers. Only one private app is allowed at a time. To show the app to anyone with the link, make the repository public. This repo holds no key and only synthetic data.
+- Memory is limited, from 690 MB guaranteed up to 2.7 GB. The row limit of 200,000 comes from measuring this. An app that goes over its limit is slowed down or stopped.
+- Apps with no visitors for 12 hours go to sleep and wake on the next visit.
+- The Gemini free tier is shared by every visitor. The app caps each session at 10 AI calls and all visitors together at 150 a day, which you can change with the AI_DAILY_LIMIT secret. The count restarts if the server restarts.
+- The settings in .streamlit/config.toml hide the developer toolbar and error details, so visitors see plain messages and not Python errors.
 
 ## Privacy
 Files are processed in the session and are not stored.

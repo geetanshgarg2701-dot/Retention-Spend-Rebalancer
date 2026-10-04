@@ -31,5 +31,9 @@ maxUploadSize = 25
 enableXsrfProtection = true
 enableStaticServing = true
 
+[client]
+toolbarMode = "viewer"
+showErrorDetails = "none"
+
 [browser]
 gatherUsageStats = false

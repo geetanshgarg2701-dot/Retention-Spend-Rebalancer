@@ -61,9 +61,74 @@ class CallBudget:
         self.used += 1
 
 
-def with_budget(ai_fn: AIFunction, budget: CallBudget) -> AIFunction:
+DEFAULT_DAILY_LIMIT = 150
+
+
+class DailyBudget:
+    """A cap on AI calls across every visitor, per UTC day, so one person cannot use up the shared free quota.
+
+    It lives in the server process. If the server restarts, the count starts again, which is a limit of this design.
+    The limit comes from the AI_DAILY_LIMIT setting, in the environment or Streamlit secrets, or 150 if that is
+    missing or not a number.
+    """
+
+    def __init__(self, limit: Optional[int] = None, clock: Optional[Callable[[], object]] = None):
+        import datetime
+        import threading
+
+        from src.aiconfig import get_value
+
+        if limit is None:
+            try:
+                limit = int(get_value("AI_DAILY_LIMIT") or DEFAULT_DAILY_LIMIT)
+            except ValueError:
+                limit = DEFAULT_DAILY_LIMIT
+        self.limit = max(0, limit)
+        self._clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc).date())
+        self._day = None
+        self.used = 0
+        self._lock = threading.Lock()
+
+    def _roll(self) -> None:
+        today = self._clock()
+        if today != self._day:
+            self._day, self.used = today, 0
+
+    @property
+    def left(self) -> int:
+        with self._lock:
+            self._roll()
+            return max(0, self.limit - self.used)
+
+    def spend(self) -> None:
+        with self._lock:
+            self._roll()
+            if self.used >= self.limit:
+                raise AICapReached("The shared AI limit for today has been reached. Try again tomorrow. The rest of the app still works.")
+            self.used += 1
+
+
+GLOBAL_DAILY = DailyBudget()
+
+
+def with_daily(ai_fn: AIFunction, daily: Optional[DailyBudget] = None) -> AIFunction:
+    """Count a call against the shared daily cap only."""
+    def call(prompt: str) -> str:
+        (GLOBAL_DAILY if daily is None else daily).spend()
+        return ai_fn(prompt)
+
+    return call
+
+
+def with_budget(ai_fn: AIFunction, budget: CallBudget, daily: Optional[DailyBudget] = None) -> AIFunction:
+    """Count a call against this session's cap and the shared daily cap. A call refused by the daily cap is not charged to the session."""
     def call(prompt: str) -> str:
         budget.spend()
+        try:
+            (GLOBAL_DAILY if daily is None else daily).spend()
+        except AICapReached:
+            budget.used -= 1
+            raise
         return ai_fn(prompt)
 
     return call

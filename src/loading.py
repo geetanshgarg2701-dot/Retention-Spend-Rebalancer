@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 MAX_UPLOAD_MB = 25
-MAX_ROWS = 500_000
+# Measured on 2026-10-04: a 150,000 row file with 16 columns peaked near 380 MB and a 500,000 row file with 4 columns
+# near 530 MB, against 690 MB guaranteed on Streamlit Community Cloud. 200,000 rows leaves room for other visitors.
+MAX_ROWS = 200_000
 _DELIMITERS = [",", ";", "\t", "|"]
 
 
