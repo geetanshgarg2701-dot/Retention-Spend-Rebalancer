@@ -18,8 +18,10 @@ from src.metrics import (
     _score,
     assign_segment,
     cohort_retention,
+    monthly_orders,
     order_count_funnel,
     payback,
+    payback_progress,
     repeat_metrics,
     retention_report,
     rfm_table,
@@ -208,6 +210,28 @@ def test_payback_on_margin(frame, cost, month):
 def test_payback_without_a_cost_says_so(frame):
     p = payback(value_curve(frame), None)
     assert p == {"basis": "revenue", "reached": False, "month": None, "entered": False}
+
+
+def test_payback_progress_matches_the_hand_count(frame):
+    # Revenue per customer by month is 80, 92, 90, 120, 120, 150, so the best is 150.
+    revenue = payback_progress(value_curve(frame), 200)
+    assert revenue == {"basis": "revenue", "entered": True, "best_value": 150.0, "share": 0.75}
+    assert payback_progress(value_curve(frame), 100)["share"] == 1.0  # capped, the cost is already covered
+    assert payback_progress(value_curve(frame), 0)["share"] == 1.0
+    margin = payback_progress(value_curve(frame, margin_pct=50), 100)  # best margin is 75
+    assert margin["basis"] == "margin" and margin["best_value"] == 75.0 and margin["share"] == 0.75
+    none = payback_progress(value_curve(frame), None)
+    assert none["entered"] is False and none["share"] is None and none["best_value"] == 150.0
+    with pytest.raises(ValueError, match="cannot be negative"):
+        payback_progress(value_curve(frame), -1)
+
+
+def test_monthly_orders_matches_the_hand_count(frame):
+    m = monthly_orders(frame)
+    # January 3 orders, February 3, March none, April 1, May 2, June 1. Ten in all.
+    assert list(m.index) == ["2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06"]
+    assert list(m) == [3, 3, 0, 1, 2, 1]
+    assert m.sum() == 10
 
 
 def test_twelve_month_value_appears_when_observed():

@@ -263,6 +263,31 @@ def payback(curve: pd.DataFrame, cost_to_win: Optional[float]) -> dict:
     }
 
 
+def payback_progress(curve: pd.DataFrame, cost_to_win: Optional[float]) -> dict:
+    """How far the best observed cumulative value per customer has got toward the cost to win one.
+
+    Uses margin when the curve has it, otherwise revenue. share is capped at 1.
+    """
+    basis = "margin" if "margin_per_customer" in curve else "revenue"
+    column = "margin_per_customer" if basis == "margin" else "revenue_per_customer"
+    best = float(curve[column].max())
+    if cost_to_win is None:
+        return {"basis": basis, "entered": False, "best_value": best, "share": None}
+    if cost_to_win < 0:
+        raise ValueError("The cost to win a customer cannot be negative.")
+    share = 1.0 if cost_to_win == 0 else min(1.0, best / cost_to_win)
+    return {"basis": basis, "entered": True, "best_value": best, "share": share}
+
+
+def monthly_orders(frame: pd.DataFrame) -> pd.Series:
+    """Orders per calendar month from the first to the last month in the file, zeros included."""
+    df = _check(frame)
+    months = _month_index(df["order_date"])
+    counts = months.value_counts().reindex(range(int(months.min()), int(months.max()) + 1), fill_value=0).sort_index()
+    counts.index = [_month_label(int(i)) for i in counts.index]
+    return counts.rename("Orders")
+
+
 def twelve_month_value(curve: pd.DataFrame) -> Optional[float]:
     """Revenue per customer over the first 12 months, only when customers have been observed that long."""
     row = curve[curve["month"] == TWELVE_MONTH_INDEX]

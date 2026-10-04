@@ -8,14 +8,14 @@ Status: Weeks 1 and 2 of a six-week build are working. You can load an order exp
 1. Upload a CSV of past orders, or load the synthetic sample.
 2. Confirm the column matches. Each suggestion shows its confidence and the reason for it. A date format option and a line item option are included.
 3. Review the cleaning: metrics, a rule-by-rule table of what was removed and why, warnings, a preview, and a download of the clean CSV.
-4. See retention results: repeat purchase rate, cohort retention by first order month, customer segments, and customer value with payback.
+4. See retention results: an overview row with orders per month, how many customers come back the month after, customers by segment and payback progress, then the repeat purchase rate, a funnel of customers by order count, cohort retention by first order month, customer segments, and customer value with payback.
 
 Everything on the results screen is observed in the orders. Nothing is forecast. Payback needs a cost to win one customer that you enter yourself, and there is no default. Margin is optional, and without it payback uses revenue and says so.
 
 Files can have up to 500,000 rows and 25 MB. The app explains in plain words when a file is empty, is not a CSV, or cannot be parsed.
 
 ## Look and fonts
-The interface uses a dark slate theme with one teal accent, set in .streamlit/config.toml and src/ui.py. Text and accent colors are tested for at least 4.5 to 1 contrast, and the colors never carry meaning alone, since every confidence level is also written in words. The fonts are DM Sans for body text and Fraunces for headings and large numbers. Both are licensed under the SIL Open Font License 1.1 and are served from this repo in static/fonts, so no font is loaded from another site. The license files are next to the fonts.
+The interface uses a dark slate theme with one teal accent, set in .streamlit/config.toml and src/ui.py. Progress is shown as linked hexagon steps. Cards and layers fade in with short, one-time motion that switches off for anyone who has reduced motion turned on in their system. Text and accent colors are tested for at least 4.5 to 1 contrast, and the colors never carry meaning alone, since every confidence level is also written in words. The fonts are DM Sans for body text and Fraunces for headings and large numbers. Both are licensed under the SIL Open Font License 1.1 and are served from this repo in static/fonts, so no font is loaded from another site. The license files are next to the fonts.
 
 ## Run locally
 Windows PowerShell:

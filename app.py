@@ -8,7 +8,9 @@ from src import ui
 from src.cleaning import clean_orders, steps_to_frame
 from src.loading import MAX_ROWS, MAX_UPLOAD_MB, LoadError, read_upload
 from src.mapper import FIELD_HELP, FIELD_LABELS, FIELDS, REQUIRED_FIELDS, gemini_ai_function, map_columns
-from src.metrics import DEFAULT_WINDOW_DAYS, SEGMENT_ORDER, SEGMENT_RULES, WINDOW_CHOICES, retention_report
+from src.metrics import (
+    DEFAULT_WINDOW_DAYS, SEGMENT_ORDER, SEGMENT_RULES, WINDOW_CHOICES, monthly_orders, payback_progress, retention_report,
+)
 from src.sample_data import DEFAULT_PATH, SYNTHETIC_NOTICE, generate_orders
 
 NO_COLUMN = "No column"
@@ -54,8 +56,14 @@ def load_sample() -> pd.DataFrame:
 
 def stage_load() -> None:
     st.html(ui.hero_html(
-        "Find out whether to move some ad budget from winning new customers to keeping the ones you have. "
-        "Upload your order export and get a plain answer, with every assumption visible."
+        eyebrow="Retention analysis for small online stores",
+        headline="Keep the customers you already paid for",
+        lead=(
+            "Find out whether to move some ad budget from winning new customers to keeping the ones you have. "
+            "Upload your order export and get a plain answer, with every assumption visible."
+        ),
+        tags=["Observed, not forecast", "Free to run", "Private by default"],
+        nodes=["Load orders", "Confirm columns", "Review cleaning", "Retention results"],
     ))
     st.html(ui.points_html([
         ("Clean it", "A messy export is cleaned by eight rules, and you see every row that was removed and why."),
@@ -265,6 +273,51 @@ def money(value: float) -> str:
     return f"{value:,.2f}"
 
 
+def command_row(frame: pd.DataFrame, report) -> None:
+    """Four overview cards, each built from numbers the metrics module computed.
+
+    The first two use Streamlit's own sparkline, which the HTML sanitizer cannot strip.
+    """
+    monthly = monthly_orders(frame)
+    pooled = report.cohorts.average.iloc[1:]  # month 0 is always 100 percent, so the line starts at month 1
+    segments = [(name, int(report.segments.loc[name, "customers"])) for name in SEGMENT_ORDER]
+    cost = st.session_state["retention_inputs"]["cost"]
+    progress = payback_progress(report.curve, cost)
+
+    first, second, third, fourth = st.columns(4)
+    first.metric(
+        "Orders per month, on average", f"{monthly.mean():,.0f}", border=True,
+        chart_data=monthly.tolist(), chart_type="line",
+        help=f"Orders per month from {monthly.index[0]} to {monthly.index[-1]}. The last month may be incomplete.",
+    )
+    if len(pooled):
+        second.metric(
+            "Customers back the month after", f"{pooled.iloc[0]:.0%}", border=True,
+            chart_data=pooled.tolist(), chart_type="line",
+            help="Share of customers who ordered again in their second month, pooled over every cohort that has "
+                 "reached it. The line follows the later months.",
+        )
+    else:
+        second.metric("Customers back the month after", "Not enough history", border=True)
+    with third.container(border=True):
+        st.html(ui.card_html(
+            "Customers by segment", f"{sum(n for _, n in segments):,}",
+            "Sorted by how recently and how often they bought.", ui.segment_strip_html(segments),
+        ))
+    with fourth.container(border=True):
+        if progress["entered"]:
+            note = (
+                f"Best {progress['basis']} per customer so far is {money(progress['best_value'])} "
+                f"against {money(cost)} to win one."
+            )
+            st.html(ui.card_html(
+                "Payback progress", f"{progress['share']:.0%} of your cost", note,
+                ui.progress_html(progress["share"], "Payback progress"),
+            ))
+        else:
+            st.html(ui.card_html("Payback progress", "Enter your cost", "Add what it costs to win one customer in the inputs above."))
+
+
 def stage_results() -> None:
     ds = st.session_state["dataset"]
     frame = st.session_state["clean"].frame
@@ -310,6 +363,9 @@ def stage_results() -> None:
     for warning in report.warnings:
         st.warning(warning)
 
+    # command row
+    command_row(frame, report)
+
     # repeat purchase
     st.markdown("**Repeat purchase**")
     rep = report.repeat
@@ -341,7 +397,10 @@ def stage_results() -> None:
         for r in report.funnel.itertuples()
     ]
     st.html(ui.funnel_html(steps))
-    st.caption("Each bar is the share of all customers who placed at least that many orders. It is counted from your file, not predicted.")
+    st.caption(
+        "Each layer counts customers who placed at least that many orders, counted from your file and not predicted. "
+        "Layer widths are scaled so small steps stay visible, so read the exact shares on the right."
+    )
 
     # cohorts
     st.markdown("**Cohort retention**")
