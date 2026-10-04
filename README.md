@@ -1,6 +1,6 @@
 # Retention Spend Rebalancer
 
-A web app that reads an order export from a small online store and shows whether to move ad budget from winning new customers to keeping existing ones.
+A web app that reads an order export from a business store and shows whether to move ad budget from winning new customers to keeping existing ones.
 
 Status: Weeks 1 and 2 of a six-week build are working. You can load an order export, confirm how its columns match, review every cleaning decision, and see retention results. The budget scenario slider and the AI summary come in later weeks. The project brief and plan are in CLAUDE.md.
 

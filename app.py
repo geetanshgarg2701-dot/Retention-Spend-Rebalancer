@@ -56,7 +56,7 @@ def load_sample() -> pd.DataFrame:
 
 def stage_load() -> None:
     st.html(ui.hero_html(
-        eyebrow="Retention analysis for small online stores",
+        eyebrow="Retention analysis for business stores",
         headline="Keep the customers you already paid for",
         lead=(
             "Find out whether to move some ad budget from winning new customers to keeping the ones you have. "

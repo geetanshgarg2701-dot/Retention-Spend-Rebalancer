@@ -142,9 +142,11 @@ def test_unknown_pill_level_falls_back_to_not_matched():
 
 # ----------------------------------------------------------------------- hero
 
-def test_hero_sets_the_last_headline_word_in_emphasis_and_lists_tags_and_nodes():
+def test_hero_sets_the_last_words_in_emphasis_and_lists_tags_and_nodes():
     out = hero_html("A label", "Keep the customers you paid for", "Lead text.", ["One", "Two"], ["Load", "Match", "Clean", "Measure"])
-    assert '<em>for</em>' in out and "Keep the customers you paid" in out
+    assert "<em>paid for</em>" in out and "Keep the customers you <em>" in out
+    assert "<em>for</em>" in hero_html("A", "Keep for", "L", [], [], emphasis_words=1)
+    assert "<em>" in hero_html("A", "One", "L", [], [])  # a one word headline is emphasized whole, without crashing
     assert out.count('class="rsr-tag"') == 2 and out.count('class="rsr-node"') == 4
     assert 'aria-hidden="true"' in out  # the decorative cluster is hidden from screen readers
 

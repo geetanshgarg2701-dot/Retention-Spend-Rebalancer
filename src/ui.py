@@ -85,7 +85,8 @@ CSS = f"""
   color: {_P['text']}; margin: 0 0 1rem 0; }}
 .rsr-headline em {{ color: {_P['teal']}; font-style: italic; }}
 .rsr-lead {{ color: {_P['muted']}; font-size: 1.1rem; line-height: 1.55; margin: 0 0 1.1rem 0; max-width: 40rem; }}
-.rsr-tags {{ display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }}
+.rsr-tags, .rsr-stepper {{ padding-inline-start: 0 !important; margin-inline: 0 !important; }}
+.rsr-tags {{ display: flex; flex-wrap: wrap; gap: 0.5rem; margin-block: 0; padding: 0; list-style: none; }}
 .rsr-tag {{ display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.25rem 0.8rem; border: 1px solid {_P['line']};
   border-radius: 999px; color: {_P['muted']}; font-size: 0.88rem; background: {_P['panel']}; }}
 .rsr-tag::before {{ content: ""; width: 0.45rem; height: 0.45rem; border-radius: 999px; background: {_P['teal']}; }}
@@ -179,10 +180,13 @@ def stepper(stage: int) -> None:
     st.html(stepper_html(stage))
 
 
-def hero_html(eyebrow: str, headline: str, lead: str, tags: Sequence[str], nodes: Sequence[str]) -> str:
-    """The first screen. headline is plain text, and its last word is set in italic teal."""
+def hero_html(
+    eyebrow: str, headline: str, lead: str, tags: Sequence[str], nodes: Sequence[str], emphasis_words: int = 2,
+) -> str:
+    """The first screen. headline is plain text, and its last words are set in italic teal."""
     words = headline.split()
-    lead_words, last = " ".join(words[:-1]), words[-1]
+    split = max(0, len(words) - emphasis_words)
+    lead_words, last = " ".join(words[:split]), " ".join(words[split:])
     tag_items = "".join(f'<li class="rsr-tag">{html.escape(t)}</li>' for t in tags)
     cluster = "".join(
         f'<div class="rsr-node">{_hex(str(i))}<span>{html.escape(n)}</span></div>' for i, n in enumerate(nodes, start=1)
