@@ -304,6 +304,15 @@ def test_insights_screen_works_with_ai_off_and_still_has_summary_ideas_and_quest
     assert "Champions" in text and "ideas to test, not predictions" in " ".join(c.value for c in at.caption)
 
 
+def test_the_ideas_tab_does_not_say_ai_is_off_when_ai_is_available(fake_ai):
+    at = to_insights()
+    captions = " ".join(c.value for c in at.caption)
+    assert "Choose Get AI ideas for ideas written by AI" in captions
+    assert "AI is off, so these are the app's own starting ideas" not in captions
+    at.button(key="gen_ideas").click().run()
+    assert any("Ideas written by AI" in c.value for c in at.caption)
+
+
 def test_a_ready_made_question_runs_without_ai():
     at = to_insights()
     at.selectbox(key="ins_preset").select("Orders and revenue by month")

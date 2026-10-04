@@ -807,8 +807,12 @@ def stage_insights() -> None:
     with ideas_tab:
         segs = ins.segment_facts(report)
         seg_key = _digest(segs)
-        cached_ideas = st.session_state.get(f"ins_ideas_{seg_key}") or ins.template_ideas()
-        st.caption(cached_ideas.note)
+        asked = st.session_state.get(f"ins_ideas_{seg_key}")
+        cached_ideas = asked or ins.template_ideas()
+        if asked is None and can_call:
+            st.caption("These are the app's own starting ideas. Choose Get AI ideas for ideas written by AI.")
+        else:
+            st.caption(cached_ideas.note)
         for name in SEGMENT_ORDER:
             st.markdown(f"**{name}**, customers who {ins.SEGMENT_DESCRIPTIONS[name]}")
             for idea in cached_ideas.ideas[name]:

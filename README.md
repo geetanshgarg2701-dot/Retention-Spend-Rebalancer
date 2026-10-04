@@ -2,7 +2,9 @@
 
 A web app that reads an order export from a business store and shows whether to move ad budget from winning new customers to keeping existing ones.
 
-Status: Weeks 1 to 4 of a six-week build are working. You can load an order export, confirm how its columns match, review every cleaning decision, see retention results, try a budget scenario, and get a plain-English summary, ideas for each customer group and answers to your own questions. The project brief and plan are in CLAUDE.md.
+Live app: https://retention-spend-rebalancer-jq2rgyelyae7dspdcpv7te.streamlit.app
+
+Status: Weeks 1 to 5 of a six-week build are working and deployed. You can load an order export, confirm how its columns match, review every cleaning decision, see retention results, try a budget scenario, and get a plain-English summary, ideas for each customer group and answers to your own questions. The project brief and plan are in CLAUDE.md.
 
 ## What works today
 1. Upload a CSV of past orders, or load the synthetic sample.
@@ -75,6 +77,7 @@ Files are processed in the session and are not stored.
 - Column matching, if AI is on: only column names and up to three masked sample values per column go to the Gemini API, with emails and phone-like numbers replaced by placeholders. Columns that look personal, such as names, phones, addresses and notes, send the column name only. Order rows and customer data are never sent.
 - Summary and ideas: only calculated figures go to the Gemini API. The insights screen shows them under Exactly what is sent. No customer id, email, order row or order value from your file is included.
 - Ask your data: your question and the column names and types go to the Gemini API. The result is never sent back.
+- The hosting platform is outside this app's control. When the app runs on Streamlit Community Cloud, the platform itself may contact its own services, such as usage analytics. The app's code makes no outside calls except to the Gemini API when AI is on, and loads no fonts, scripts or images from other sites.
 - On the free Gemini tier, Google may use what is sent to improve its products, and people may review it, so keep AI off for data you consider sensitive, and do not type customer names or emails into a question.
 
 ## Data
