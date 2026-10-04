@@ -7,6 +7,7 @@ import streamlit as st
 from src.cleaning import clean_orders, steps_to_frame
 from src.loading import MAX_ROWS, MAX_UPLOAD_MB, LoadError, read_upload
 from src.mapper import FIELD_HELP, FIELD_LABELS, FIELDS, REQUIRED_FIELDS, gemini_ai_function, map_columns
+from src.metrics import DEFAULT_WINDOW_DAYS, SEGMENT_ORDER, SEGMENT_RULES, WINDOW_CHOICES, retention_report
 from src.sample_data import DEFAULT_PATH, SYNTHETIC_NOTICE, generate_orders
 
 NO_COLUMN = "No column"
@@ -21,7 +22,7 @@ LINE_CHOICES = {
 }
 CONFIDENCE_TEXT = {"high": "High confidence", "medium": "Medium confidence", "low": "Low confidence, check this one", "none": "Not matched"}
 SESSION_PREFIXES = ("map_", "mapres_", "opt_")
-SESSION_KEYS = ("dataset", "stage", "confirmed", "clean", "load_error", "upload_id")
+SESSION_KEYS = ("dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs")
 
 st.set_page_config(page_title="Retention spend rebalancer", layout="wide")
 
@@ -243,6 +244,165 @@ def stage_review() -> None:
             file_name="synthetic_clean_orders.csv" if ds["synthetic"] else "clean_orders.csv",
             mime="text/csv", key="download_clean",
         )
+        if st.button("Continue to retention results", key="to_results", type="primary"):
+            st.session_state["stage"] = 4
+            st.rerun()
+    privacy_note()
+
+
+# ------------------------------------------------------------------ stage 4
+
+def money(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def stage_results() -> None:
+    ds = st.session_state["dataset"]
+    frame = st.session_state["clean"].frame
+    st.subheader("4. Retention results")
+    if st.button("Back to the cleaning review", key="back_to_review"):
+        st.session_state["stage"] = 3
+        st.rerun()
+    if ds["synthetic"]:
+        st.info(
+            SYNTHETIC_NOTICE + " Its repeat buying pattern comes from settings chosen for the demo, "
+            "so these results describe the demo and nothing else."
+        )
+    st.write(
+        "Everything on this page is observed in your orders. Nothing is forecast. "
+        "Money is in the currency your file uses."
+    )
+
+    saved = st.session_state.setdefault("retention_inputs", {"window": DEFAULT_WINDOW_DAYS, "cost": None, "margin": None})
+    with st.expander("Your inputs", expanded=True):
+        left, middle, right = st.columns(3)
+        window = left.selectbox(
+            "Repeat window in days", WINDOW_CHOICES, index=WINDOW_CHOICES.index(saved["window"]),
+            key=f"opt_{ds['id']}_window", help="How soon after a first order a repeat order counts.",
+        )
+        cost = middle.number_input(
+            "Cost to win one customer", min_value=0.0, value=saved["cost"], step=1.0, format="%.2f",
+            placeholder="Enter your cost", key=f"opt_{ds['id']}_cost",
+            help="Your ad and sales cost per new customer. Payback needs it. There is no default.",
+        )
+        margin = right.number_input(
+            "Gross margin percent, optional", min_value=0.01, max_value=100.0, value=saved["margin"], step=1.0,
+            format="%.1f", placeholder="Enter your margin", key=f"opt_{ds['id']}_margin",
+            help="Share of revenue you keep after product cost. Without it, payback uses revenue.",
+        )
+    st.session_state["retention_inputs"] = {"window": window, "cost": cost, "margin": margin}
+
+    try:
+        with st.spinner("Calculating"):
+            report = retention_report(frame, window_days=window, cost_to_win=cost, margin_pct=margin)
+    except ValueError as err:
+        st.error(str(err))
+        return
+    for warning in report.warnings:
+        st.warning(warning)
+
+    # repeat purchase
+    st.markdown("**Repeat purchase**")
+    rep = report.repeat
+    cols = st.columns(4)
+    cols[0].metric("Customers who ordered again", f"{rep['repeat_rate']:.1%}")
+    cols[1].metric(
+        f"Ordered again within {window} days",
+        f"{rep['repeat_in_window_rate']:.1%}" if rep["repeat_in_window_rate"] is not None else "Not enough history",
+    )
+    cols[2].metric(
+        "Median days to a second order",
+        f"{rep['median_days_to_second']:.0f}" if rep["median_days_to_second"] is not None else "None yet",
+    )
+    cols[3].metric("Average order value", money(rep["average_order_value"]))
+    st.caption(
+        f"{rep['repeat_customers']:,} of {rep['customers']:,} customers placed two or more orders. "
+        f"The {window} day rate counts only the {rep['eligible_customers']:,} customers whose first order is at least "
+        f"{window} days before the last order in the file, so recent customers are not undercounted. "
+        "The median covers only customers who did order again, so it reads low when many are still waiting."
+    )
+
+    # cohorts
+    st.markdown("**Cohort retention**")
+    cohorts = report.cohorts
+    table = cohorts.retention.copy()
+    table.columns = [f"Month {k}" for k in table.columns]
+    table.insert(0, "Customers", cohorts.sizes)
+    pooled = cohorts.average.copy()
+    pooled.index = [f"Month {k}" for k in pooled.index]
+    table.loc["All cohorts"] = pd.concat([pd.Series({"Customers": cohorts.sizes.sum()}), pooled])
+    shares = [c for c in table.columns if c != "Customers"]
+    st.dataframe(
+        table.style.format({"Customers": "{:,.0f}"}).format("{:.0%}", subset=shares, na_rep=""),
+        width="stretch",
+    )
+    st.caption(
+        "Each row groups customers by the calendar month of their first order. Each cell is the share of that group "
+        "who ordered in that month after, with month 0 as the first order month. Blank means the month has not "
+        "happened yet in the file. The last row pools every cohort that has reached that month."
+    )
+
+    # segments
+    st.markdown("**Customer segments**")
+    seg = report.segments.reset_index().rename(columns={
+        "segment": "Segment", "customers": "Customers", "share_of_customers": "Share of customers",
+        "average_orders": "Average orders", "average_spend": "Average spend", "share_of_revenue": "Share of revenue",
+    })[["Segment", "Customers", "Share of customers", "Average orders", "Average spend", "Share of revenue"]]
+    st.dataframe(
+        seg.style.format({
+            "Customers": "{:,.0f}", "Share of customers": "{:.0%}", "Average orders": "{:.1f}",
+            "Average spend": "{:,.2f}", "Share of revenue": "{:.0%}",
+        }),
+        hide_index=True, width="stretch",
+    )
+    st.caption(
+        "Customers are scored 1 to 5 on how recently they bought, how often, and how much they spent, "
+        "ranked within this file and counted back from the last order date in it. The scores then sort them into segments."
+    )
+    with st.expander("How segments are decided"):
+        for name in SEGMENT_ORDER:
+            st.write(f"{name}: {SEGMENT_RULES[name]}")
+        st.write("Rules are checked from New down to Lapsed, and the first match wins.")
+
+    # value and payback
+    st.markdown("**Customer value and payback**")
+    curve = report.curve
+    chart_cols = ["revenue_per_customer"] + (["margin_per_customer"] if "margin_per_customer" in curve else [])
+    st.line_chart(
+        curve.set_index("month")[chart_cols].rename(columns={
+            "revenue_per_customer": "Revenue per customer", "margin_per_customer": "Margin per customer",
+        }),
+        x_label="Months since the first order month", y_label="Cumulative value per customer",
+    )
+    st.caption(
+        "Month 0 is the month of a customer's first order. Each point uses only customers who have had that many months "
+        "to order, so later months rest on fewer and older customers and the line can dip."
+    )
+    left, right = st.columns(2)
+    if report.twelve_month is not None:
+        left.metric("Revenue per customer in the first 12 months", money(report.twelve_month))
+    else:
+        left.metric("Revenue per customer in the first 12 months", "Not enough history")
+    pay = report.payback
+    basis = "margin" if pay["basis"] == "margin" else "revenue"
+    if not pay["entered"]:
+        right.metric("Payback month", "Enter your cost")
+    elif pay["reached"]:
+        right.metric("Payback month", f"Month {pay['month']}")
+    else:
+        right.metric("Payback month", "Not reached")
+    if not pay["entered"]:
+        st.caption("Enter what it costs you to win one customer to see payback.")
+    elif pay["reached"]:
+        st.caption(
+            f"Payback is the first month when cumulative {basis} per customer reaches your cost of {money(cost)}, "
+            "counting the first order month as month 0."
+            + (" It uses revenue because no margin was entered, so it overstates what you keep." if basis == "revenue" else "")
+        )
+    else:
+        st.caption(
+            f"Cumulative {basis} per customer has not reached {money(cost)} within the {len(curve)} months in this file."
+        )
     privacy_note()
 
 
@@ -252,13 +412,13 @@ def main() -> None:
     st.title("Retention spend rebalancer")
     st.write(
         "Find out whether to move some ad budget from winning new customers to keeping existing ones. "
-        "This is step one of the build: load an order export and clean it, with every decision visible."
+        "Load an order export, clean it with every decision visible, then see how well you keep customers."
     )
     stage = st.session_state.get("stage", 1)
     if "dataset" not in st.session_state:
         stage = 1
-    st.caption(f"Step {stage} of 3")
-    {1: stage_load, 2: stage_columns, 3: stage_review}[stage]()
+    st.caption(f"Step {stage} of 4")
+    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results}[stage]()
 
 
 main()
