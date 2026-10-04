@@ -31,8 +31,13 @@ Restrained and readable. Sentence case, plain verbs, no emojis, no all-caps labe
 Keep API keys out of the repo and out of logs. Read the key from an environment variable or Streamlit secrets only. Validate every upload: CSV only, size cap, row cap. Never send raw customer data to the model. The mapper may send only column headers plus up to three masked sample values per column, with emails replaced by a placeholder. Offer a switch to turn AI matching off. Add a privacy note in the UI. Scan dependencies before deploy.
 
 ## Status
-Done and untested: the repo skeleton, config files, and src/parsing.py with date and money helpers.
-Not started: src/mapper.py, src/cleaning.py, src/sample_data.py, app.py, tests, README.
+Weeks 1 to 4 are built, tested and pushed to GitHub. Weeks 5 and 6 are not started.
+
+Built: src/parsing.py, src/loading.py, src/mapper.py, src/cleaning.py, src/sample_data.py, src/metrics.py, src/scenario.py, src/checker.py, src/insights.py, src/askdata.py, src/aiconfig.py, src/ui.py, app.py, the tests and the README. The live Gemini column matching was tried once with a real key, and the Week 4 features were tried with three live calls on the synthetic sample.
+
+Done on 2026-10-04: a dependency scan of requirements.txt found no known vulnerabilities.
+
+Still open before deploy: pin exact dependency versions, test a large file for memory on Streamlit Community Cloud, set the Gemini key as a Streamlit secret, and run on three real businesses.
 
 ## Week 1 spec: data foundation
 Goal: a messy order export loads cleanly and the user can see every cleaning decision.
@@ -82,8 +87,8 @@ Run with python -m pytest.
 ### Definition of done for Week 1
 A messy export loads, the columns are matched and confirmed, every cleaning decision is visible, tests pass, and the live Gemini mapping has been tried once with a real key.
 
-## Known limitation to resolve
-The UCI Online Retail data has unit price and quantity, not a line total. Either add an optional quantity field that multiplies a unit price, or tell the user to add a line total column before upload. Ask which before building.
+## Known limitation, resolved
+The UCI Online Retail data has unit price and quantity, not a line total. Resolved by adding an optional quantity field that multiplies a unit price, which you chose on 2026-10-03.
 
 ## Later weeks
 Week 2: cohort retention, repeat purchase rate, RFM segments, lifetime value and payback, with a hand-checked test.
