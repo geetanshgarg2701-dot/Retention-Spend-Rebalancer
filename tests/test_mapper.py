@@ -181,6 +181,38 @@ def test_payload_has_headers_and_at_most_three_masked_values():
     assert "@" not in build_ai_prompt(payload)
 
 
+@pytest.mark.parametrize("header", [
+    "Billing Name", "First Name (Billing)", "Customer Name", "Billing Phone", "Mobile",
+    "Shipping Address", "Zip", "City", "Notes", "Customer Note", "Company", "Phone (Billing)",
+])
+def test_personal_looking_headers_send_no_sample_values(header):
+    df = pd.DataFrame({header: ["Real Person", "555-123-4567", "12 Main St"], "Total": ["5", "6", "7"]})
+    payload = build_ai_payload(df)
+    assert payload[header] == []
+    assert payload["Total"] == ["5", "6", "7"]
+    assert "Real Person" not in build_ai_prompt(payload)
+
+
+@pytest.mark.parametrize("header", ["Lineitem name", "Product name", "Item name", "SKU"])
+def test_product_headers_are_not_treated_as_personal(header):
+    assert build_ai_payload(pd.DataFrame({header: ["Blue mug"]}))[header] == ["Blue mug"]
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("555-123-4567", "<number>"),
+    ("+1 (555) 123-4567", "<number>"),
+    ("4111111111111111", "<number>"),
+    ("555-0172", "555-0172"),
+    ("17850", "17850"),
+    ("2025-12-30", "2025-12-30"),
+    ("12/30/2025 10:15", "12/30/2025 10:15"),
+    ("2025-12-30 15:36:54 +0000", "2025-12-30 15:36:54 +0000"),
+    ("$1,234.50", "$1,234.50"),
+])
+def test_phone_like_and_long_numbers_are_masked_but_dates_and_money_are_not(value, expected):
+    assert mask_value(value) == expected
+
+
 def test_parse_ai_response_accepts_valid_json_and_fences():
     hs = ["A", "B", "C"]
     body = {"customer_id": "A", "order_date": "B", "order_value": None}

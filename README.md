@@ -35,7 +35,7 @@ The tests cover parsing, column matching, the cleaning rules with hand-checked c
 Column matching works without AI. To add AI suggestions, copy .env.example to .env and set GEMINI_API_KEY and GEMINI_MODEL, or set them as environment variables. Check Google's current model list before choosing a model name. Without both values the AI switch stays off. Never commit the .env file.
 
 ## Privacy
-Files are processed in the session and are not stored. If AI column matching is on, only column names and up to three masked sample values per column go to the Gemini API, with emails replaced by a placeholder. Order rows and customer data are never sent. The AI switch can be turned off at any time.
+Files are processed in the session and are not stored. If AI column matching is on, only column names and up to three masked sample values per column go to the Gemini API, with emails and phone-like numbers replaced by placeholders. Columns that look personal, such as names, phones, addresses and notes, send the column name only. Order rows and customer data are never sent. On the free Gemini tier, Google may use what is sent to improve its products, and people may review it, so keep AI matching off for data you consider sensitive. The AI switch can be turned off at any time.
 
 ## Data
 The demo dataset is synthetic and generated for this project with a fixed random seed. It is not a real business, and every row says so. The repeat buying pattern in it is a modeling choice for the demo, not a statistic. Regenerate it with:

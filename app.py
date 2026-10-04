@@ -89,8 +89,11 @@ def privacy_note() -> None:
     st.caption(
         "Privacy: your file is processed in this session and is not stored. "
         "If AI matching is on, only column names and up to three masked sample values per column "
-        "go to the Gemini API, with emails replaced by a placeholder. "
-        "Order rows and customer data are never sent. You can turn AI matching off at any time."
+        "go to the Gemini API, with emails and phone-like numbers replaced by placeholders. "
+        "Columns that look personal, such as names, phones and addresses, send the column name only. "
+        "Order rows and customer data are never sent. "
+        "On the free Gemini tier, Google may use what is sent to improve its products, "
+        "and people may review it. You can turn AI matching off at any time."
     )
 
 

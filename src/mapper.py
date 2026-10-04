@@ -47,6 +47,13 @@ SAMPLE_SIZE = 500
 AI_SAMPLES_PER_COLUMN = 3
 AI_MAX_VALUE_LENGTH = 40
 EMAIL_PLACEHOLDER = "<email>"
+NUMBER_PLACEHOLDER = "<number>"
+AI_MIN_NUMBER_DIGITS = 10
+AI_PERSONAL_TOKENS = (
+    "name", "first", "last", "surname", "phone", "mobile", "tel", "telephone", "cell",
+    "address", "street", "city", "zip", "postal", "postcode", "province", "state",
+    "company", "note", "comment", "message", "ip",
+)
 
 # A trailing "!" marks a synonym that only counts as an exact match.
 SYNONYMS: dict[str, list[str]] = {
@@ -122,6 +129,7 @@ _DATE_LIKE = re.compile(
 )
 _LONG_INT = re.compile(r"\d{6,}")
 _EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+_NUMBER_SHAPE = re.compile(r"\+?[\d\s().\-]+")
 
 _PRICE_WORDS = ("unit", "price", "rate")
 _TOTAL_WORDS = ("total", "amount", "revenue", "sales", "subtotal", "value")
@@ -386,17 +394,34 @@ AIFunction = Callable[[str], str]
 
 
 def mask_value(value: object) -> str:
-    """Replace emails with a placeholder and cut long values short."""
+    """Replace emails and phone-like or long numbers with placeholders and cut long values short."""
     text = _EMAIL.sub(EMAIL_PLACEHOLDER, str(value).strip())
+    digits = sum(ch.isdigit() for ch in text)
+    if digits >= AI_MIN_NUMBER_DIGITS and _NUMBER_SHAPE.fullmatch(text) and not _DATE_LIKE.search(text):
+        return NUMBER_PLACEHOLDER
     if len(text) > AI_MAX_VALUE_LENGTH:
         text = text[:AI_MAX_VALUE_LENGTH] + "..."
     return text
 
 
+def is_personal_header(header: object) -> bool:
+    """Headers that look like names, phones, addresses or free text send no sample values."""
+    tokens = _normalize(header).split()
+    if any(t.startswith(("product", "item", "lineitem", "sku")) for t in tokens):
+        return False
+    return any(t == p or (len(p) > 3 and t.startswith(p)) for t in tokens for p in AI_PERSONAL_TOKENS)
+
+
 def build_ai_payload(df: pd.DataFrame) -> dict[str, list[str]]:
-    """Headers with up to three masked sample values each. Nothing else leaves the app."""
+    """Headers with up to three masked sample values each. Nothing else leaves the app.
+
+    Columns whose header looks personal send the header only.
+    """
     payload: dict[str, list[str]] = {}
     for ci, header in enumerate(df.columns):
+        if is_personal_header(header):
+            payload[str(header)] = []
+            continue
         masked = nonblank(df.iloc[:, ci]).head(200).map(mask_value)
         payload[str(header)] = list(masked.drop_duplicates().head(AI_SAMPLES_PER_COLUMN))
     return payload
