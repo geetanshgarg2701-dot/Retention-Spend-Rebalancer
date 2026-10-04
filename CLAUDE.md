@@ -31,13 +31,13 @@ Restrained and readable. Sentence case, plain verbs, no emojis, no all-caps labe
 Keep API keys out of the repo and out of logs. Read the key from an environment variable or Streamlit secrets only. Validate every upload: CSV only, size cap, row cap. Never send raw customer data to the model. The mapper may send only column headers plus up to three masked sample values per column, with emails replaced by a placeholder. Offer a switch to turn AI matching off. Add a privacy note in the UI. Scan dependencies before deploy.
 
 ## Status
-Weeks 1 to 4 are built, tested and pushed to GitHub. Weeks 5 and 6 are not started.
+Weeks 1 to 5 are built, tested, pushed to GitHub and deployed. Week 6 is not started. The app is live at https://retention-spend-rebalancer-jq2rgyelyae7dspdcpv7te.streamlit.app
 
-Built: src/parsing.py, src/loading.py, src/mapper.py, src/cleaning.py, src/sample_data.py, src/metrics.py, src/scenario.py, src/checker.py, src/insights.py, src/askdata.py, src/aiconfig.py, src/ui.py, app.py, the tests and the README. The live Gemini column matching was tried once with a real key, and the Week 4 features were tried with three live calls on the synthetic sample.
+Built: src/parsing.py, src/loading.py, src/mapper.py, src/cleaning.py, src/sample_data.py, src/metrics.py, src/scenario.py, src/checker.py, src/insights.py, src/askdata.py, src/aiconfig.py, src/ui.py, app.py, the tests and the README. The live Gemini features were tried with real calls on the synthetic sample, and the AI summary passed the figure checker on five different synthetic datasets.
 
-Done on 2026-10-04: a dependency scan of requirements.txt found no known vulnerabilities.
+Done on 2026-10-04: exact dependency versions are pinned and a scan found no known vulnerabilities. Memory was measured on large files, and the row cap was lowered from 500,000 to 200,000 to fit the free hosting tier. The app is deployed on Streamlit Community Cloud with the Gemini key in Streamlit secrets, and the live app matched the local numbers exactly.
 
-Still open before deploy: pin exact dependency versions, test a large file for memory on Streamlit Community Cloud, set the Gemini key as a Streamlit secret, and run on three real businesses.
+Still open: a live test of uploading a real file, and Week 6, which is running the tool on three real businesses, getting two reviewers to rate it, and writing the case study, the LinkedIn post and the interview story.
 
 ## Week 1 spec: data foundation
 Goal: a messy order export loads cleanly and the user can see every cleaning decision.
