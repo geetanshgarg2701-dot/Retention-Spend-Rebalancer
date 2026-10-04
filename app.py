@@ -11,6 +11,7 @@ from src.mapper import FIELD_HELP, FIELD_LABELS, FIELDS, REQUIRED_FIELDS, gemini
 from src.metrics import (
     DEFAULT_WINDOW_DAYS, SEGMENT_ORDER, SEGMENT_RULES, WINDOW_CHOICES, monthly_orders, payback_progress, retention_report,
 )
+from src import scenario as sc
 from src.sample_data import DEFAULT_PATH, SYNTHETIC_NOTICE, generate_orders
 
 NO_COLUMN = "No column"
@@ -24,7 +25,9 @@ LINE_CHOICES = {
     "Use the first line value, for exports where every line repeats the order total": "first",
 }
 SESSION_PREFIXES = ("map_", "mapres_", "opt_")
-SESSION_KEYS = ("dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs")
+SESSION_KEYS = (
+    "dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs", "scenario_inputs",
+)
 
 st.set_page_config(page_title="Retention spend rebalancer", layout="wide")
 
@@ -63,7 +66,7 @@ def stage_load() -> None:
             "Upload your order export and get a plain answer, with every assumption visible."
         ),
         tags=["Observed, not forecast", "Free to run", "Private by default"],
-        nodes=["Load orders", "Confirm columns", "Review cleaning", "Retention results"],
+        nodes=ui.STEPS,
     ))
     st.html(ui.points_html([
         ("Clean it", "A messy export is cleaned by eight rules, and you see every row that was removed and why."),
@@ -496,6 +499,186 @@ def stage_results() -> None:
         st.caption(
             f"Cumulative {basis} per customer has not reached {money(cost)} within the {len(curve)} months in this file."
         )
+    if st.button("Continue to the budget scenario", key="to_scenario", type="primary"):
+        st.session_state["stage"] = 5
+        st.rerun()
+    privacy_note()
+
+
+# ------------------------------------------------------------------ stage 5
+
+def scenario_chart(sim, selected_pct: int) -> None:
+    import altair as alt
+
+    pal = ui.PALETTE
+    df = pd.DataFrame({
+        "Shift": (sim.shifts * 100).round().astype(int), "Low": sim.p10, "Middle": sim.median, "High": sim.p90,
+    })
+    x = alt.X("Shift:Q", title="Share of the budget moved toward retention, percent")
+    tip = [alt.Tooltip("Shift:Q", title="Shift, percent"), alt.Tooltip("Low:Q", title="Low", format=",.0f"),
+           alt.Tooltip("Middle:Q", title="Middle", format=",.0f"), alt.Tooltip("High:Q", title="High", format=",.0f")]
+    band = alt.Chart(df).mark_area(opacity=0.25, color=pal["teal"]).encode(
+        x=x, y=alt.Y("Low:Q", title="Estimated change in value"), y2=alt.Y2("High:Q"))
+    line = alt.Chart(df).mark_line(color=pal["teal"], strokeWidth=2.5).encode(x=x, y="Middle:Q", tooltip=tip)
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color=pal["muted"], strokeDash=[4, 4]).encode(y="y:Q")
+    chosen = alt.Chart(pd.DataFrame({"Shift": [selected_pct]})).mark_rule(color=pal["amber"], strokeWidth=2).encode(x="Shift:Q")
+    chart = (
+        (band + line + zero + chosen).properties(height=300)
+        .configure(background="transparent")
+        .configure_axis(labelColor=pal["muted"], titleColor=pal["muted"], gridColor=pal["line"],
+                        domainColor=pal["edge"], tickColor=pal["edge"])
+        .configure_view(stroke=None)
+    )
+    st.altair_chart(chart, theme=None, width="stretch")
+
+
+def stage_scenario() -> None:
+    ds = st.session_state["dataset"]
+    frame = st.session_state["clean"].frame
+    retention = st.session_state.get("retention_inputs") or {"cost": None, "margin": None}
+    st.subheader("Budget scenario")
+    if st.button("Back to the retention results", key="back_to_results"):
+        st.session_state["stage"] = 4
+        st.rerun()
+    if ds["synthetic"]:
+        st.info(
+            SYNTHETIC_NOTICE + " The numbers you enter below are yours to choose, and the results describe the demo only."
+        )
+    st.html(ui.tags_html(["Estimate", "Not a forecast", "Rests on your assumptions"]))
+    st.write(
+        "See what could change if some budget moves from winning new customers to keeping the ones you have. "
+        "Customer value comes from your orders. The costs are your own figures, because orders cannot show "
+        "what retention spend achieves."
+    )
+
+    default_exponent, default_uncertainty = sc.DEFAULT_EXPONENT, int(sc.DEFAULT_UNCERTAINTY * 100)
+    saved = st.session_state.setdefault("scenario_inputs", {
+        "horizon": 12, "budget": None, "share": None, "cost_win": retention["cost"], "cost_back": None,
+        "exponent": default_exponent, "uncertainty": default_uncertainty, "extra_orders": None,
+    })
+    key = f"opt_{ds['id']}_s_"
+    with st.expander("Your inputs", expanded=True):
+        a, b, c = st.columns(3)
+        horizon = a.selectbox("Horizon in months", sc.HORIZON_CHOICES, index=sc.HORIZON_CHOICES.index(saved["horizon"]),
+                              key=key + "horizon", help="How far ahead the estimate looks.")
+        budget = b.number_input(f"Marketing budget over {horizon} months", min_value=0.0, value=saved["budget"], step=100.0,
+                                format="%.2f", placeholder="Enter your budget", key=key + "budget",
+                                help="Everything you plan to spend on winning and keeping customers over the horizon.")
+        share = c.number_input("Share spent on winning new customers today, percent", min_value=0.0, max_value=100.0,
+                               value=saved["share"], step=5.0, format="%.1f", placeholder="Enter a percent",
+                               key=key + "share", help="The rest is treated as spent on keeping customers.")
+        d, e = st.columns(2)
+        cost_win = d.number_input("Cost to win one customer", min_value=0.0, value=saved["cost_win"], step=1.0, format="%.2f",
+                                  placeholder="Enter your cost", key=key + "cost_win")
+        cost_back = e.number_input("Cost to bring one customer back", min_value=0.0, value=saved["cost_back"], step=1.0,
+                                   format="%.2f", placeholder="Enter your cost", key=key + "cost_back",
+                                   help="What it costs you to win back one customer who would not have ordered again. "
+                                        "Orders cannot measure this, so it is your estimate. The ranges below let you say how unsure you are.")
+
+    observed = sc.observed_inputs(frame, horizon, retention.get("margin"))
+    with st.expander("Advanced assumptions", expanded=False):
+        f, g, h = st.columns(3)
+        exponent = f.number_input("Diminishing returns exponent", min_value=sc.MIN_EXPONENT, max_value=1.0,
+                                  value=float(saved["exponent"]), step=0.05, format="%.2f", key=key + "exponent",
+                                  help="Below 1, doubling spend gives less than double the customers. 1 means no diminishing "
+                                       "returns. The default is an illustrative assumption, not a measurement.")
+        uncertainty = g.number_input("Uncertainty, plus or minus percent", min_value=0, max_value=90,
+                                     value=int(saved["uncertainty"]), step=5, key=key + "uncertainty",
+                                     help="How far the costs, extra orders and exponent may be from what you entered.")
+        extra = h.number_input("Extra orders from a brought-back customer", min_value=0.0, value=saved["extra_orders"],
+                               step=0.1, format="%.2f", placeholder=f"Observed {observed['extra_orders']:.2f}",
+                               key=key + "extra", help="Leave empty to use the average extra orders your repeat customers placed. Those customers "
+                                      "came back on their own, so this may be generous for customers you pay to bring back.")
+        st.caption(
+            f"From your orders, in {observed['basis']}: a new customer is worth {money(observed['value_new'])} by month "
+            f"{observed['value_new_month'] + 1}, one order averages {money(observed['order_value'])}, and "
+            f"{observed['repeat_customers']:,} repeat customers placed {observed['extra_orders']:.2f} extra orders on average."
+        )
+    st.session_state["scenario_inputs"] = {
+        "horizon": horizon, "budget": budget, "share": share, "cost_win": cost_win, "cost_back": cost_back,
+        "exponent": exponent, "uncertainty": uncertainty, "extra_orders": extra,
+    }
+
+    missing = [name for name, value in (
+        ("the budget", budget), ("today's share on winning customers", share),
+        ("the cost to win a customer", cost_win), ("the cost to bring a customer back", cost_back),
+    ) if value is None]
+    if missing:
+        st.info("Enter " + ", ".join(missing) + " to see the scenario.")
+        privacy_note()
+        return
+    if observed["history_short"]:
+        st.warning(
+            f"Your orders cover fewer than {horizon} months, so a new customer's value is taken at month "
+            f"{observed['value_new_month'] + 1}. A longer horizon is probably understated."
+        )
+    if observed["repeat_customers"] == 0 and extra is None:
+        st.warning("No customer ordered more than once, so brought-back customers are worth nothing unless you enter extra orders.")
+
+    inputs = sc.Inputs(
+        budget=budget, acquisition_share=share / 100, cost_to_win=cost_win, cost_to_bring_back=cost_back,
+        value_new=observed["value_new"], extra_orders=extra if extra is not None else observed["extra_orders"],
+        order_value=observed["order_value"], exponent=exponent,
+    )
+    try:
+        with st.spinner("Simulating"):
+            ranges = sc.ranges_from_pct(inputs, uncertainty / 100)
+            sim = sc.simulate(inputs, ranges)
+    except ValueError as err:
+        st.error(str(err))
+        return
+
+    low, high = sc.allowed_shift_pct(inputs.acquisition_share)
+    best = max(low, min(high, round(sim.best_median * 100)))
+    if low == high:
+        st.info("This split leaves no room to move money.")
+        shift = 0
+    else:
+        shift = st.slider(
+            "Move this share of the budget toward retention, in percent", low, high, best, format="%d",
+            key=f"{key}shift_{low}_{high}_{best}",
+            help="Percent of your total budget. Positive moves money to keeping customers, negative moves it to winning them. "
+                 "It starts at the best move found in the simulations.",
+        )
+    idx = int(shift - low)
+    before, after = sc.evaluate(inputs, 0.0), sc.evaluate(inputs, shift / 100)
+
+    cols = st.columns(4)
+    cols[0].metric(
+        "Estimated change in value", f"{sim.median[idx]:+,.0f}", border=True,
+        help=f"Middle estimate in {observed['basis']} over {horizon} months. Range {sim.p10[idx]:,.0f} to {sim.p90[idx]:,.0f}.",
+    )
+    cols[1].metric("Chance it beats today's split", f"{sim.prob_positive[idx]:.0%}", border=True,
+                   help=f"Share of {sim.draws:,} simulations where this move gains value.")
+    cols[2].metric("New customers won", f"{after['new_customers']:,.0f}", border=True,
+                   delta=f"{after['new_customers'] - before['new_customers']:+,.0f}")
+    cols[3].metric("Customers brought back", f"{after['brought_back']:,.0f}", border=True,
+                   delta=f"{after['brought_back'] - before['brought_back']:+,.0f}")
+    st.caption(
+        f"Range for the change in value: {sim.p10[idx]:,.0f} to {sim.p90[idx]:,.0f} in {observed['basis']}. "
+        "The customer figures compare your chosen split with today's split, using the middle assumptions."
+    )
+    st.write(sc.summarize(inputs, sim, int(shift), horizon, observed["basis"]))
+
+    st.markdown("**Change in value for every possible move**")
+    scenario_chart(sim, int(shift))
+    st.caption(
+        "The teal line is the middle estimate and the shaded band runs from the low to the high estimate. "
+        "The amber line marks your chosen move and the dashed line is no change. Everything above the dashed line gains value."
+    )
+
+    st.markdown("**Assumptions behind these estimates**")
+    entered = {"budget", "acquisition_share", "cost_to_win", "cost_to_bring_back"}
+    if exponent != default_exponent:
+        entered.add("exponent")
+    if extra is not None:
+        entered.add("extra_orders")
+    if uncertainty != default_uncertainty:
+        entered.add("ranges")
+    st.dataframe(sc.assumptions_table(inputs, ranges, observed, horizon, entered), hide_index=True, width="stretch")
+    with st.expander("What this cannot tell you", expanded=True):
+        for line in sc.CAVEATS:
+            st.write(line)
     privacy_note()
 
 
@@ -508,7 +691,7 @@ def main() -> None:
     if "dataset" not in st.session_state:
         stage = 1
     ui.stepper(stage)
-    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results}[stage]()
+    {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results, 5: stage_scenario}[stage]()
 
 
 main()

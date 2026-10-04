@@ -2,13 +2,17 @@
 
 A web app that reads an order export from a business store and shows whether to move ad budget from winning new customers to keeping existing ones.
 
-Status: Weeks 1 and 2 of a six-week build are working. You can load an order export, confirm how its columns match, review every cleaning decision, and see retention results. The budget scenario slider and the AI summary come in later weeks. The project brief and plan are in CLAUDE.md.
+Status: Weeks 1 to 3 of a six-week build are working. You can load an order export, confirm how its columns match, review every cleaning decision, see retention results, and try a budget scenario. The AI summary comes in a later week. The project brief and plan are in CLAUDE.md.
 
 ## What works today
 1. Upload a CSV of past orders, or load the synthetic sample.
 2. Confirm the column matches. Each suggestion shows its confidence and the reason for it. A date format option and a line item option are included.
 3. Review the cleaning: metrics, a rule-by-rule table of what was removed and why, warnings, a preview, and a download of the clean CSV.
 4. See retention results: an overview row with orders per month, how many customers come back the month after, customers by segment and payback progress, then the repeat purchase rate, a funnel of customers by order count, cohort retention by first order month, customer segments, and customer value with payback.
+
+5. Try a budget scenario: enter your budget, your current split and what it costs to win and to bring back a customer, then move a slider to see the estimated change in value, the chance the move beats your current split, and the customers won and brought back. A simulation of 2,000 draws gives a range instead of one number, and an assumptions table lists every input and where it came from.
+
+The scenario screen is an estimate, not a forecast. Customer value comes from your orders. The cost to bring a customer back is your own figure, because orders cannot show whether retention spend works. The diminishing returns setting is an illustrative assumption you can change, and the screen warns when the best move sits at the edge of the range it tests. The default for extra orders comes from customers who returned on their own, so it may overstate what a customer you pay to bring back is worth.
 
 Everything on the results screen is observed in the orders. Nothing is forecast. Payback needs a cost to win one customer that you enter yourself, and there is no default. Margin is optional, and without it payback uses revenue and says so.
 
@@ -56,6 +60,7 @@ The command refuses to overwrite an existing file.
 - src/mapper.py: rule-based and optional AI column matching
 - src/cleaning.py: the eight cleaning rules, warnings and stats
 - src/metrics.py: repeat rate, order count funnel, cohorts, segments, customer value and payback
+- src/scenario.py: the budget scenario model, simulation, sentences and assumptions table
 - src/ui.py: the stepper, confidence pills, funnel and styling helpers
 - static/fonts: DM Sans and Fraunces with their licenses
 - src/parsing.py: date and money helpers

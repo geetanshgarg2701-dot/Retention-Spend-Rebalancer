@@ -144,6 +144,106 @@ def test_a_new_file_clears_the_results_inputs():
     assert "retention_inputs" not in at.session_state
 
 
+def to_scenario():
+    at = to_results()
+    at.button(key="to_scenario").click().run()
+    assert not at.exception
+    return at
+
+
+def fill_scenario(at, budget=10000.0, share=80.0, cost_win=60.0, cost_back=25.0):
+    at.number_input(key="opt_sample_s_budget").set_value(budget)
+    at.number_input(key="opt_sample_s_share").set_value(share)
+    at.number_input(key="opt_sample_s_cost_win").set_value(cost_win)
+    at.number_input(key="opt_sample_s_cost_back").set_value(cost_back)
+    at.run()
+    assert not at.exception
+    return at
+
+
+def test_scenario_screen_asks_for_the_missing_inputs_first():
+    at = to_scenario()
+    assert at.session_state["stage"] == 5
+    assert any("Budget scenario" in s.value for s in at.subheader)
+    assert any("Enter the budget" in i.value and "the cost to bring a customer back" in i.value for i in at.info)
+    assert not any(m.label == "Estimated change in value" for m in at.metric)
+    at.number_input(key="opt_sample_s_budget").set_value(10000.0).run()
+    note = next(i.value for i in at.info if i.value.startswith("Enter "))
+    assert "the budget" not in note and "today's share" in note
+
+
+def test_scenario_results_match_an_independent_run_of_the_model():
+    from src import scenario as sc
+
+    at = fill_scenario(to_scenario())
+    frame = at.session_state["clean"].frame
+    obs = sc.observed_inputs(frame, 12, None)
+    inputs = sc.Inputs(budget=10000, acquisition_share=0.8, cost_to_win=60, cost_to_bring_back=25,
+                       value_new=obs["value_new"], extra_orders=obs["extra_orders"], order_value=obs["order_value"])
+    sim = sc.simulate(inputs, sc.ranges_from_pct(inputs, 0.25))
+    low, _ = sc.allowed_shift_pct(0.8)
+    best = max(low, min(50, round(sim.best_median * 100)))
+    idx = best - low
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Estimated change in value"] == f"{sim.median[idx]:+,.0f}"
+    assert metrics["Chance it beats today's split"] == f"{sim.prob_positive[idx]:.0%}"
+    assert at.slider[0].value == best  # the slider starts at the best move found
+    text = " ".join(m.value for m in at.markdown)
+    assert "estimate" in text.lower() and "not a forecast" in text
+
+
+def test_scenario_screen_labels_everything_as_an_estimate_and_lists_assumptions():
+    at = fill_scenario(to_scenario())
+    text = " ".join(m.value for m in at.markdown)
+    assert "Assumptions behind these estimates" in text
+    assert any(d.value is not None for d in at.dataframe)
+    sources = at.dataframe[-1].value["Source"].tolist()
+    assert sources.count("You entered it") == 4 and "Observed in your orders" in sources
+    assert any("cannot show whether retention spend works" in m.value for m in at.markdown)
+
+
+def test_moving_the_slider_changes_the_estimate_without_errors():
+    at = fill_scenario(to_scenario())
+    slider = at.slider[0]
+    before = {m.label: m.value for m in at.metric}["Estimated change in value"]
+    slider.set_value(0).run()
+    assert not at.exception
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Estimated change in value"] == "+0" and metrics["Chance it beats today's split"] == "0%"
+    assert before != "+0"
+    assert any("Keeping today's split is the baseline" in m.value for m in at.markdown)
+
+
+def test_changing_assumptions_changes_the_answer():
+    at = fill_scenario(to_scenario())
+    first = {m.label: m.value for m in at.metric}["Estimated change in value"]
+    at.number_input(key="opt_sample_s_exponent").set_value(1.0).run()
+    assert not at.exception
+    assert {m.label: m.value for m in at.metric}["Estimated change in value"] != first
+    at.number_input(key="opt_sample_s_extra").set_value(0.0).run()
+    assert not at.exception  # zero extra orders is allowed, and retention is then worth nothing
+
+
+def test_cost_to_win_is_prefilled_from_the_results_screen_and_inputs_survive_going_back():
+    at = to_results()
+    at.number_input(key="opt_sample_cost").set_value(45.0).run()
+    at.button(key="to_scenario").click().run()
+    assert at.number_input(key="opt_sample_s_cost_win").value == 45.0
+    at.number_input(key="opt_sample_s_budget").set_value(8000.0).run()
+    at.button(key="back_to_results").click().run()
+    at.button(key="to_scenario").click().run()
+    assert at.number_input(key="opt_sample_s_budget").value == 8000.0
+
+
+def test_a_new_file_clears_the_scenario_inputs():
+    at = fill_scenario(to_scenario())
+    at.button(key="back_to_results").click().run()
+    at.button(key="back_to_review").click().run()
+    at.button(key="back_to_columns").click().run()
+    at.button(key="back_to_load").click().run()
+    assert "scenario_inputs" not in at.session_state
+
+
 def test_missing_required_column_blocks_the_confirm_button():
     at = fresh()
     at.button(key="load_sample").click().run()

@@ -45,7 +45,7 @@ SEGMENT_COLORS = {
     "Occasional": PALETTE["muted"], "At risk": PALETTE["amber"], "Lapsed": PALETTE["clay"],
 }
 
-STEPS = ["Load orders", "Confirm columns", "Review cleaning", "Retention results"]
+STEPS = ["Load orders", "Confirm columns", "Review cleaning", "Retention results", "Budget scenario"]
 
 PILL_TEXT = {
     "high": "High confidence",
@@ -199,6 +199,12 @@ def hero_html(
         f'<ul class="rsr-tags">{tag_items}</ul></div>'
         f'<div class="rsr-cluster" aria-hidden="true">{cluster}</div></div>'
     )
+
+
+def tags_html(tags: Iterable[str]) -> str:
+    """A row of small flat tags, for labels such as Estimate."""
+    items = "".join(f'<li class="rsr-tag">{html.escape(t)}</li>' for t in tags)
+    return f'<ul class="rsr-tags">{items}</ul>'
 
 
 def points_html(points: Iterable[tuple[str, str]]) -> str:

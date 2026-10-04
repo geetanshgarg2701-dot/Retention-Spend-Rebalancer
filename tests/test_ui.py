@@ -113,8 +113,8 @@ def test_palette_has_no_pure_white_or_black_and_no_purple():
 def test_stepper_marks_done_current_and_upcoming_with_hexagons():
     out = stepper_html(3)
     assert out.count("is-done") == 2 and out.count("is-current") == 1
-    assert out.count("<li") == 4 and 'aria-current="step"' in out
-    assert out.count('class="rsr-hex"') == 4
+    assert out.count("<li") == len(ui.STEPS) == 5 and 'aria-current="step"' in out
+    assert out.count('class="rsr-hex"') == len(ui.STEPS)
     for name in ui.STEPS:
         assert name in out
     assert out.index("Review cleaning") > out.index("is-current")
@@ -122,6 +122,16 @@ def test_stepper_marks_done_current_and_upcoming_with_hexagons():
 
 def test_stepper_at_the_first_stage_has_nothing_done():
     assert stepper_html(1).count("is-done") == 0
+
+
+def test_the_last_stage_marks_the_other_four_done():
+    out = stepper_html(5)
+    assert out.count("is-done") == 4 and out.count("is-current") == 1 and "Budget scenario" in out
+
+
+def test_tags_html_escapes_and_lists_each_tag():
+    out = ui.tags_html(["Estimate", HOSTILE])
+    assert out.count('class="rsr-tag"') == 2 and "<script" not in out and "&lt;script&gt;" in out
 
 
 def test_hexagon_uses_a_flat_clip_path():
