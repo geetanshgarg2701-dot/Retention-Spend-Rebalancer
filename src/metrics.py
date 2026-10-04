@@ -127,6 +127,33 @@ def cohort_retention(frame: pd.DataFrame) -> CohortResult:
     )
 
 
+# ------------------------------------------------------------------ order count funnel
+
+FUNNEL_LEVELS = (1, 2, 3, 5)
+
+
+def order_count_funnel(frame: pd.DataFrame, levels: tuple = FUNNEL_LEVELS) -> pd.DataFrame:
+    """How many customers reached each order count, as observed in the file.
+
+    share is the share of all customers. share_of_previous is the share of the
+    step before, and is None for the first step.
+    """
+    df = _check(frame)
+    per_customer = df.groupby("customer_id").size()
+    total = len(per_customer)
+    rows, previous = [], None
+    for level in levels:
+        count = int((per_customer >= level).sum())
+        rows.append({
+            "orders": level,
+            "customers": count,
+            "share": count / total,
+            "share_of_previous": None if previous is None else (count / previous if previous else 0.0),
+        })
+        previous = count
+    return pd.DataFrame(rows)
+
+
 # --------------------------------------------------------------------------- RFM
 
 def assign_segment(r: int, f: int, is_new: bool) -> str:
@@ -253,6 +280,7 @@ class RetentionReport:
     curve: pd.DataFrame
     payback: dict
     twelve_month: Optional[float]
+    funnel: pd.DataFrame
     warnings: list[str] = field(default_factory=list)
 
 
@@ -286,5 +314,5 @@ def retention_report(
         )
     return RetentionReport(
         repeat, cohorts, rfm, segment_summary(rfm), curve,
-        payback(curve, cost_to_win), twelve_month_value(curve), warnings,
+        payback(curve, cost_to_win), twelve_month_value(curve), order_count_funnel(frame), warnings,
     )

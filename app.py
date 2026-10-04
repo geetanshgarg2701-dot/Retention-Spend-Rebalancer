@@ -1,9 +1,10 @@
-"""Retention spend rebalancer, Week 1: load an order export, confirm columns, review cleaning."""
+"""Retention spend rebalancer: load an order export, confirm columns, review cleaning, see retention results."""
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
+from src import ui
 from src.cleaning import clean_orders, steps_to_frame
 from src.loading import MAX_ROWS, MAX_UPLOAD_MB, LoadError, read_upload
 from src.mapper import FIELD_HELP, FIELD_LABELS, FIELDS, REQUIRED_FIELDS, gemini_ai_function, map_columns
@@ -20,7 +21,6 @@ LINE_CHOICES = {
     "Add the line values together": "sum",
     "Use the first line value, for exports where every line repeats the order total": "first",
 }
-CONFIDENCE_TEXT = {"high": "High confidence", "medium": "Medium confidence", "low": "Low confidence, check this one", "none": "Not matched"}
 SESSION_PREFIXES = ("map_", "mapres_", "opt_")
 SESSION_KEYS = ("dataset", "stage", "confirmed", "clean", "load_error", "upload_id", "retention_inputs")
 
@@ -53,36 +53,45 @@ def load_sample() -> pd.DataFrame:
 # ------------------------------------------------------------------ stage 1
 
 def stage_load() -> None:
-    st.subheader("1. Load your orders")
-    st.write(
-        "Upload an order export from your store as a CSV file. "
-        "You will confirm how the columns match before anything is cleaned."
-    )
+    st.html(ui.hero_html(
+        "Find out whether to move some ad budget from winning new customers to keeping the ones you have. "
+        "Upload your order export and get a plain answer, with every assumption visible."
+    ))
+    st.html(ui.points_html([
+        ("Clean it", "A messy export is cleaned by eight rules, and you see every row that was removed and why."),
+        ("Match it", "Columns are matched for you with a reason for each. You confirm before anything runs."),
+        ("Measure it", "Repeat rate, cohorts, segments, customer value and payback, all calculated from your orders."),
+    ]))
+    st.subheader("Load your orders")
     st.session_state.setdefault("upload_n", 0)
-    uploaded = st.file_uploader(
-        f"CSV file, up to {MAX_UPLOAD_MB} MB and {MAX_ROWS:,} rows",
-        type=["csv"], key=f"upload_{st.session_state['upload_n']}",
-    )
-    if uploaded is not None and uploaded.file_id != st.session_state.get("upload_id"):
-        reset_state()
-        st.session_state["upload_id"] = uploaded.file_id
-        try:
-            raw = read_upload(uploaded.name, uploaded.getvalue())
-        except LoadError as err:
-            st.session_state["load_error"] = str(err)
-        else:
-            set_dataset(uploaded.name, raw, "upload", uploaded.file_id)
-            st.rerun()
-    if uploaded is not None and st.session_state.get("load_error"):
-        st.error(st.session_state["load_error"])
-
-    st.write("No export to hand? Try the synthetic sample.")
-    if st.button("Load the synthetic sample", key="load_sample"):
-        reset_state()
-        st.session_state["upload_n"] += 1
-        set_dataset("synthetic_orders_messy.csv", load_sample(), "sample", "sample")
-        st.rerun()
-    st.caption(SYNTHETIC_NOTICE)
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        uploaded = st.file_uploader(
+            f"CSV file, up to {MAX_UPLOAD_MB} MB and {MAX_ROWS:,} rows",
+            type=["csv"], key=f"upload_{st.session_state['upload_n']}",
+        )
+        if uploaded is not None and uploaded.file_id != st.session_state.get("upload_id"):
+            reset_state()
+            st.session_state["upload_id"] = uploaded.file_id
+            try:
+                raw = read_upload(uploaded.name, uploaded.getvalue())
+            except LoadError as err:
+                st.session_state["load_error"] = str(err)
+            else:
+                set_dataset(uploaded.name, raw, "upload", uploaded.file_id)
+                st.rerun()
+        if uploaded is not None and st.session_state.get("load_error"):
+            st.error(st.session_state["load_error"])
+    with right:
+        with st.container(border=True):
+            st.markdown("**No export to hand?**")
+            st.write("Try the synthetic sample to see the whole flow.")
+            if st.button("Load the synthetic sample", key="load_sample"):
+                reset_state()
+                st.session_state["upload_n"] += 1
+                set_dataset("synthetic_orders_messy.csv", load_sample(), "sample", "sample")
+                st.rerun()
+            st.caption(SYNTHETIC_NOTICE)
     privacy_note()
 
 
@@ -113,7 +122,7 @@ def stage_columns() -> None:
     ds = st.session_state["dataset"]
     raw: pd.DataFrame = ds["raw"]
     confirmed = st.session_state.get("confirmed")
-    st.subheader("2. Confirm columns")
+    st.subheader("Confirm columns")
     if st.button("Load a different file", key="back_to_load"):
         reset_state()
         st.session_state["upload_n"] = st.session_state.get("upload_n", 0) + 1
@@ -140,12 +149,12 @@ def stage_columns() -> None:
         match = result.matches[f]
         default = confirmed["mapping"].get(f) if confirmed else match.header
         index = headers.index(default) + 1 if default in headers else 0
-        left, middle, right = st.columns([2, 1, 4])
+        left, middle, right = st.columns([2, 2, 4], vertical_alignment="center")
         label = FIELD_LABELS[f] + (", required" if f in REQUIRED_FIELDS else "")
         pick = left.selectbox(
             label, [NO_COLUMN] + headers, index=index, key=f"map_{ds['id']}_{use_ai}_{f}", help=FIELD_HELP[f]
         )
-        middle.caption(CONFIDENCE_TEXT[match.confidence])
+        middle.html(ui.pill_html(match.confidence))
         right.caption(match.reason)
         if pick != NO_COLUMN:
             chosen[f] = pick
@@ -210,7 +219,7 @@ def _index_of(choices: dict, value) -> int:
 def stage_review() -> None:
     ds = st.session_state["dataset"]
     frame, steps, warnings, stats = st.session_state["clean"]
-    st.subheader("3. Review the cleaning")
+    st.subheader("Review the cleaning")
     if st.button("Change columns", key="back_to_columns"):
         st.session_state["stage"] = 2
         st.rerun()
@@ -219,10 +228,10 @@ def stage_review() -> None:
 
     if stats["orders"]:
         cols = st.columns(4)
-        cols[0].metric("Orders", f"{stats['orders']:,}")
-        cols[1].metric("Customers", f"{stats['customers']:,}")
-        cols[2].metric("Repeat customers", f"{stats['repeat_customer_share']:.0%}")
-        cols[3].metric("Total order value", f"{stats['total_revenue']:,.2f}")
+        cols[0].metric("Orders", f"{stats['orders']:,}", border=True)
+        cols[1].metric("Customers", f"{stats['customers']:,}", border=True)
+        cols[2].metric("Repeat customers", f"{stats['repeat_customer_share']:.0%}", border=True)
+        cols[3].metric("Total order value", f"{stats['total_revenue']:,.2f}", border=True)
         st.caption(
             f"Orders run from {stats['first_date']:%Y-%m-%d} to {stats['last_date']:%Y-%m-%d}. "
             "Total order value is a plain sum of the cleaned values, in the currency the file uses. "
@@ -259,7 +268,7 @@ def money(value: float) -> str:
 def stage_results() -> None:
     ds = st.session_state["dataset"]
     frame = st.session_state["clean"].frame
-    st.subheader("4. Retention results")
+    st.subheader("Retention results")
     if st.button("Back to the cleaning review", key="back_to_review"):
         st.session_state["stage"] = 3
         st.rerun()
@@ -305,22 +314,34 @@ def stage_results() -> None:
     st.markdown("**Repeat purchase**")
     rep = report.repeat
     cols = st.columns(4)
-    cols[0].metric("Customers who ordered again", f"{rep['repeat_rate']:.1%}")
+    cols[0].metric("Customers who ordered again", f"{rep['repeat_rate']:.1%}", border=True)
     cols[1].metric(
         f"Ordered again within {window} days",
         f"{rep['repeat_in_window_rate']:.1%}" if rep["repeat_in_window_rate"] is not None else "Not enough history",
+        border=True,
     )
     cols[2].metric(
         "Median days to a second order",
         f"{rep['median_days_to_second']:.0f}" if rep["median_days_to_second"] is not None else "None yet",
+        border=True,
     )
-    cols[3].metric("Average order value", money(rep["average_order_value"]))
+    cols[3].metric("Average order value", money(rep["average_order_value"]), border=True)
     st.caption(
         f"{rep['repeat_customers']:,} of {rep['customers']:,} customers placed two or more orders. "
         f"The {window} day rate counts only the {rep['eligible_customers']:,} customers whose first order is at least "
         f"{window} days before the last order in the file, so recent customers are not undercounted. "
         "The median covers only customers who did order again, so it reads low when many are still waiting."
     )
+
+    # funnel
+    st.markdown("**How far customers get**")
+    steps = [
+        (f"{int(r.orders)} or more orders" if r.orders > 1 else "At least 1 order", int(r.customers), float(r.share),
+         None if pd.isna(r.share_of_previous) else float(r.share_of_previous))
+        for r in report.funnel.itertuples()
+    ]
+    st.html(ui.funnel_html(steps))
+    st.caption("Each bar is the share of all customers who placed at least that many orders. It is counted from your file, not predicted.")
 
     # cohorts
     st.markdown("**Cohort retention**")
@@ -332,14 +353,17 @@ def stage_results() -> None:
     pooled.index = [f"Month {k}" for k in pooled.index]
     table.loc["All cohorts"] = pd.concat([pd.Series({"Customers": cohorts.sizes.sum()}), pooled])
     shares = [c for c in table.columns if c != "Customers"]
+    tinted = [c for c in shares if c != "Month 0"]  # month 0 is always 100 percent, so it stays plain
     st.dataframe(
-        table.style.format({"Customers": "{:,.0f}"}).format("{:.0%}", subset=shares, na_rep=""),
+        table.style.format({"Customers": "{:,.0f}"}).format("{:.0%}", subset=shares, na_rep="")
+        .map(ui.tint_style, subset=tinted),
         width="stretch",
     )
     st.caption(
         "Each row groups customers by the calendar month of their first order. Each cell is the share of that group "
         "who ordered in that month after, with month 0 as the first order month. Blank means the month has not "
-        "happened yet in the file. The last row pools every cohort that has reached that month."
+        "happened yet in the file. The last row pools every cohort that has reached that month. "
+        "Shading steps up at 5, 10, 20 and 40 percent, so lighter means more customers came back."
     )
 
     # segments
@@ -378,19 +402,29 @@ def stage_results() -> None:
         "Month 0 is the month of a customer's first order. Each point uses only customers who have had that many months "
         "to order, so later months rest on fewer and older customers and the line can dip."
     )
+    with st.expander("Customers behind each month"):
+        behind = curve.rename(columns={
+            "month": "Month", "customers_observed": "Customers observed",
+            "revenue_per_customer": "Revenue per customer", "margin_per_customer": "Margin per customer",
+        })
+        st.dataframe(
+            behind.style.format({"Customers observed": "{:,.0f}", "Revenue per customer": "{:,.2f}", "Margin per customer": "{:,.2f}"}),
+            hide_index=True, width="stretch",
+        )
+        st.caption("Later months rest on fewer customers, so read them with care.")
     left, right = st.columns(2)
     if report.twelve_month is not None:
-        left.metric("Revenue per customer in the first 12 months", money(report.twelve_month))
+        left.metric("Revenue per customer in the first 12 months", money(report.twelve_month), border=True)
     else:
-        left.metric("Revenue per customer in the first 12 months", "Not enough history")
+        left.metric("Revenue per customer in the first 12 months", "Not enough history", border=True)
     pay = report.payback
     basis = "margin" if pay["basis"] == "margin" else "revenue"
     if not pay["entered"]:
-        right.metric("Payback month", "Enter your cost")
+        right.metric("Payback month", "Enter your cost", border=True)
     elif pay["reached"]:
-        right.metric("Payback month", f"Month {pay['month']}")
+        right.metric("Payback month", f"Month {pay['month']}", border=True)
     else:
-        right.metric("Payback month", "Not reached")
+        right.metric("Payback month", "Not reached", border=True)
     if not pay["entered"]:
         st.caption("Enter what it costs you to win one customer to see payback.")
     elif pay["reached"]:
@@ -409,15 +443,12 @@ def stage_results() -> None:
 # ------------------------------------------------------------------ main
 
 def main() -> None:
+    ui.inject_css()
     st.title("Retention spend rebalancer")
-    st.write(
-        "Find out whether to move some ad budget from winning new customers to keeping existing ones. "
-        "Load an order export, clean it with every decision visible, then see how well you keep customers."
-    )
     stage = st.session_state.get("stage", 1)
     if "dataset" not in st.session_state:
         stage = 1
-    st.caption(f"Step {stage} of 4")
+    ui.stepper(stage)
     {1: stage_load, 2: stage_columns, 3: stage_review, 4: stage_results}[stage]()
 
 

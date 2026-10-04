@@ -1,14 +1,35 @@
 [theme]
-base = "light"
-primaryColor = "#1F6F78"
-backgroundColor = "#F3F5F4"
-secondaryBackgroundColor = "#E3E9E7"
-textColor = "#1B2A2F"
-font = "sans serif"
+base = "dark"
+primaryColor = "#3BB5C0"
+backgroundColor = "#12191C"
+secondaryBackgroundColor = "#1A2428"
+textColor = "#E8EEEC"
+borderColor = "#5E7279"
+baseRadius = "0.9rem"
+buttonRadius = "0.75rem"
+chartCategoricalColors = ["#3BB5C0", "#E0B15B", "#E58B7B", "#8FB8A8", "#9FB0B3"]
+dataframeHeaderBackgroundColor = "#222F34"
+font = "DM Sans, sans-serif"
+headingFont = "Fraunces, serif"
+headingFontSizes = ["2.75rem", "1.9rem", "1.5rem"]
+headingFontWeights = [600, 600, 600]
+
+[[theme.fontFaces]]
+family = "DM Sans"
+url = "app/static/fonts/dm-sans-latin-wght-normal.woff2"
+weight = "100 900"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Fraunces"
+url = "app/static/fonts/fraunces-latin-wght-normal.woff2"
+weight = "100 900"
+style = "normal"
 
 [server]
 maxUploadSize = 25
 enableXsrfProtection = true
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

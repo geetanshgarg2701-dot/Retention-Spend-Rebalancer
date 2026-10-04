@@ -18,6 +18,7 @@ from src.metrics import (
     _score,
     assign_segment,
     cohort_retention,
+    order_count_funnel,
     payback,
     repeat_metrics,
     retention_report,
@@ -154,6 +155,22 @@ def test_scores_give_ties_the_same_score():
     s = _score(pd.Series([1, 1, 2, 2]))
     # Average ranks 1.5, 1.5, 3.5, 3.5 over 4, times 5, rounded up: 1.875 gives 2, 4.375 gives 5.
     assert list(s) == [2, 2, 5, 5]
+
+
+# --------------------------------------------------------------------- funnel
+
+def test_order_count_funnel_matches_the_hand_count(frame):
+    f = order_count_funnel(frame)
+    # Orders per customer: A 3, B 2, C 1, D 2, E 2. So 5 reach 1, 4 reach 2, 1 reaches 3, none reach 5.
+    assert list(f["orders"]) == [1, 2, 3, 5]
+    assert list(f["customers"]) == [5, 4, 1, 0]
+    assert list(f["share"]) == pytest.approx([1.0, 0.8, 0.2, 0.0])
+    assert pd.isna(f["share_of_previous"].iloc[0])  # nothing comes before the first step
+    assert list(f["share_of_previous"].iloc[1:]) == pytest.approx([0.8, 0.25, 0.0])
+
+
+def test_report_includes_the_funnel(frame):
+    assert list(retention_report(frame).funnel["customers"]) == [5, 4, 1, 0]
 
 
 # ------------------------------------------------------------- value and payback

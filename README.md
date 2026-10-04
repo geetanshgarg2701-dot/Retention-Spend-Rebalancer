@@ -14,6 +14,9 @@ Everything on the results screen is observed in the orders. Nothing is forecast.
 
 Files can have up to 500,000 rows and 25 MB. The app explains in plain words when a file is empty, is not a CSV, or cannot be parsed.
 
+## Look and fonts
+The interface uses a dark slate theme with one teal accent, set in .streamlit/config.toml and src/ui.py. Text and accent colors are tested for at least 4.5 to 1 contrast, and the colors never carry meaning alone, since every confidence level is also written in words. The fonts are DM Sans for body text and Fraunces for headings and large numbers. Both are licensed under the SIL Open Font License 1.1 and are served from this repo in static/fonts, so no font is loaded from another site. The license files are next to the fonts.
+
 ## Run locally
 Windows PowerShell:
 
@@ -52,7 +55,9 @@ The command refuses to overwrite an existing file.
 - src/loading.py: upload validation
 - src/mapper.py: rule-based and optional AI column matching
 - src/cleaning.py: the eight cleaning rules, warnings and stats
-- src/metrics.py: repeat rate, cohorts, segments, customer value and payback
+- src/metrics.py: repeat rate, order count funnel, cohorts, segments, customer value and payback
+- src/ui.py: the stepper, confidence pills, funnel and styling helpers
+- static/fonts: DM Sans and Fraunces with their licenses
 - src/parsing.py: date and money helpers
 - src/sample_data.py: the synthetic export generator
 - scripts: a one-call live check of the Gemini column matching

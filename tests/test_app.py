@@ -74,6 +74,26 @@ def test_results_screen_shows_every_section_and_labels_the_sample():
     assert any("Nothing is forecast" in m.value for m in at.markdown)
 
 
+def test_each_stage_has_its_own_title_and_the_funnel_is_computed():
+    at = fresh()
+    assert any("Load your orders" in s.value for s in at.subheader)
+    at.button(key="load_sample").click().run()
+    assert any("Confirm columns" in s.value for s in at.subheader)
+    at.button(key="confirm_columns").click().run()
+    assert any("Review the cleaning" in s.value for s in at.subheader)
+    at.button(key="to_results").click().run()
+    assert not at.exception
+    assert any("Retention results" in s.value for s in at.subheader)
+    funnel = retention_report_for(at).funnel
+    assert funnel["customers"].is_monotonic_decreasing and funnel["customers"].iloc[0] > 0
+
+
+def retention_report_for(at):
+    from src.metrics import retention_report
+
+    return retention_report(at.session_state["clean"].frame)
+
+
 def test_results_agree_with_the_metrics_module():
     from src.metrics import retention_report
 
