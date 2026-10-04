@@ -263,8 +263,8 @@ class FakeAI:
         from src.metrics import SEGMENT_ORDER
 
         self.prompts.append(prompt)
-        if "short summary" in prompt:
-            facts = json.loads(prompt.split("FACTS as JSON:\n", 1)[1])
+        if "verified points" in prompt:
+            facts = json.loads(prompt.split("including verified_points:\n", 1)[1].split("\n\nYour last answer", 1)[0])
             return self.summary or f"Your file has {facts['orders']:,} orders from {facts['customers']:,} customers."
         if "marketing ideas" in prompt:
             return self.ideas or json.dumps({n: [f"Try a gentle message for the {n} group."] for n in SEGMENT_ORDER})
@@ -289,7 +289,7 @@ def to_insights():
 
 
 def insight_prompts(ai):
-    return [p for p in ai.prompts if "short summary" in p or "marketing ideas" in p or "DuckDB SQL" in p]
+    return [p for p in ai.prompts if "verified points" in p or "marketing ideas" in p or "DuckDB SQL" in p]
 
 
 def test_insights_screen_works_with_ai_off_and_still_has_summary_ideas_and_questions():
@@ -404,7 +404,7 @@ def test_the_session_call_cap_disables_the_ai_buttons(fake_ai):
 
 def test_ai_failures_never_crash_the_screen(monkeypatch, fake_ai):
     def boom(prompt):
-        if "short summary" in prompt:
+        if "verified points" in prompt:
             raise RuntimeError("429 RESOURCE_EXHAUSTED some-secret-detail")
         return fake_ai(prompt)
 

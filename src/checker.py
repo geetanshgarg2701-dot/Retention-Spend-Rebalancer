@@ -19,6 +19,7 @@ _DIGITS = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 SPELLED = {
     "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "thirty",
     "forty", "fifty", "hundred", "thousand", "million", "half", "double", "twice", "triple", "quarter", "dozen",
+    "third", "thirds", "fourth", "fifth", "tenth",
 }
 OVERCLAIMS = (
     "will increase", "will grow", "will rise", "will double", "will pay back", "will earn", "guarantee", "guaranteed",

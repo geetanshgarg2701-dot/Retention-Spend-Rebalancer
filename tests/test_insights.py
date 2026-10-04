@@ -145,10 +145,85 @@ def test_ai_off_and_ai_failures_fall_back_without_a_crash(facts):
 
 def test_the_summary_prompt_carries_the_rules_and_only_the_facts(facts):
     prompt = ins.summary_prompt(facts)
-    assert "Never calculate anything new" in prompt and "Never write a number as a word" in prompt
-    assert "FACTS as JSON" in prompt and json.dumps(facts["orders"]) in prompt
+    assert "Do not calculate anything" in prompt and "Never write a number as a word" in prompt
+    assert "verified points" in prompt and "FACTS as JSON, including verified_points" in prompt
+    assert "No greeting" in prompt and "Never copy field names" in prompt and "never each customer" in prompt
+    assert json.dumps(facts["orders"]) in prompt
     for leak in IDS + ["713.17", "2024-01-10"]:
         assert leak not in prompt
+
+
+def test_the_model_sees_percentages_and_never_a_raw_decimal(facts):
+    sent = ins.model_facts(facts)
+    assert "repeat_rate" not in sent and sent["repeat_rate_percent"] == 80.0
+    assert '"share_of_customers"' not in json.dumps(sent) and sent["funnel"][1]["share_of_customers_percent"] == 80.0
+    assert all("share_of_customers_percent" in s and "share_of_revenue_percent" in s for s in sent["segments"])
+    assert "repeat_rate" in facts and facts["repeat_rate"] == 0.8  # the original facts are not changed
+
+
+def test_scenario_chances_are_sent_as_percentages_too():
+    sent = ins.model_facts({"scenario": SCENARIO})
+    assert sent["scenario"]["chance_it_beats_today_percent"] == 83.0 and "chance_it_beats_today" not in sent["scenario"]
+
+
+def test_the_payload_has_the_apps_own_sentences_for_the_model_to_reword(facts):
+    payload = ins.prompt_payload(facts)
+    assert payload["verified_points"] == ins.summary_points(facts)
+    assert " ".join(payload["verified_points"]) == ins.template_summary(facts)
+    assert any("orders from 5 customers" in p for p in payload["verified_points"])
+
+
+def test_a_summary_that_rewords_the_verified_points_passes_the_check(facts):
+    reworded = ("You have 10 orders from 5 customers between 2024-01 and 2024-06. About 80.0% of customers came back "
+                "for another order, and the typical wait for a second order was 38 days.")
+    assert check_text(reworded, ins.prompt_payload(facts), max_words=ins.SUMMARY_MAX_WORDS).ok
+
+
+def test_the_model_gets_one_retry_with_the_reason_and_a_good_second_answer_is_used(facts):
+    replies = iter(["Revenue grew 18% last year.", GOOD])
+    prompts = []
+
+    def ai(prompt):
+        prompts.append(prompt)
+        return next(replies)
+
+    out = ins.generate_summary(facts, ai)
+    assert out.source == "ai" and out.text == GOOD and "second try" in out.note and len(prompts) == 2
+    assert "Your last answer was rejected because it had figures that are not in your results: 18%" in prompts[1]
+    assert "Your last answer was rejected" not in prompts[0]
+
+
+def test_two_bad_answers_fall_back_after_exactly_two_calls(facts):
+    ai = fake("Revenue grew 18% last year.")
+    out = ins.generate_summary(facts, ai)
+    assert out.source == "app" and len(ai.prompts) == 2 and "discarded" in out.note
+
+
+def test_retries_can_be_turned_off(facts):
+    ai = fake("Revenue grew 18% last year.")
+    assert ins.generate_summary(facts, ai, retries=0).source == "app" and len(ai.prompts) == 1
+
+
+def test_a_failure_on_the_retry_still_falls_back_cleanly(facts):
+    calls = []
+
+    def ai(prompt):
+        calls.append(prompt)
+        if len(calls) == 2:
+            raise RuntimeError("429 quota")
+        return "Revenue grew 18% last year."
+
+    out = ins.generate_summary(facts, ai)
+    assert out.source == "app" and "limit may be used up" in out.note and len(calls) == 2
+
+
+def test_a_retry_counts_against_the_call_budget(facts):
+    budget = ins.CallBudget(limit=5)
+    ins.generate_summary(facts, ins.with_budget(fake("Revenue grew 18% last year."), budget))
+    assert budget.used == 2
+    one = ins.CallBudget(limit=1)
+    out = ins.generate_summary(facts, ins.with_budget(fake("Revenue grew 18% last year."), one))
+    assert out.source == "app" and one.used == 1 and "used its 1 AI calls" in out.note
 
 
 # ---------------------------------------------------------------- segment ideas

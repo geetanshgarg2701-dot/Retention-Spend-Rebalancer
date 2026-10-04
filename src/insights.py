@@ -155,25 +155,73 @@ def scenario_facts(inputs, sim, shift_pct: int, horizon: int, basis: str) -> dic
 # ---------------------------------------------------------------------- summary
 
 SUMMARY_RULES = (
-    "You write a short summary of a store's order history for its owner.\n"
+    "You turn a list of verified points about an online store's orders into a short, friendly summary for its owner.\n"
     "Rules:\n"
-    "- Use only the figures in FACTS. Write each figure in digits, as it appears or rounded the way it is shown.\n"
-    "- Never calculate anything new. No ratios, differences, averages, percent changes, multiples or totals that are not already in FACTS.\n"
-    "- Write shares and rates as percentages, for example 33.4%, never as decimals like 0.334.\n"
-    "- Never write a number as a word. The word one is fine in ordinary phrases.\n"
-    "- Do not use lists, headings or bullet points.\n"
-    "- Describe what the orders show. Do not say what will happen, and do not promise outcomes or give causes.\n"
-    "- If FACTS has a scenario, say clearly that it is an estimate that depends on assumptions.\n"
-    "- Write at most 140 words in short paragraphs, in plain English.\n"
+    "- Use only the figures in verified_points and FACTS, copied exactly as written. Write percentages with a percent sign.\n"
+    "- Do not calculate anything. No sums, differences, ratios, multiples, totals or counts of your own. Do not count the "
+    "segments or the months.\n"
+    "- Never write a number as a word. Do not use words such as two, three, half, double, twice, third or quarter. "
+    "Write 33.4% and never a third. The word one is fine in ordinary phrases.\n"
+    "- Do not use lists, headings or bullet points. Write short paragraphs of at most 140 words in all.\n"
+    "- Start with the summary itself. No greeting, no title and no introduction.\n"
+    "- Figures per customer are averages. Say on average or a typical customer, never each customer or every customer.\n"
+    "- Write natural sentences. Never copy field names or labels from FACTS, such as share_of_customers_percent "
+    "or cost_to_win_one_customer.\n"
+    "- Describe what the orders show. Do not predict, promise or give causes. If there is a scenario, say it is an "
+    "estimate that depends on assumptions.\n"
+    "- You may reorder and combine the points and use friendlier wording, but every figure must stay exactly as written.\n"
 )
 
+PERCENT_KEYS = {
+    "repeat_rate", "repeat_in_window_rate", "return_next_month_rate", "share_of_customers", "share_of_revenue",
+    "chance_it_beats_today",
+}
 
-def summary_prompt(facts: dict) -> str:
-    return SUMMARY_RULES + "\nFACTS as JSON:\n" + json.dumps(facts, ensure_ascii=True, sort_keys=True)
+
+def model_facts(facts: dict) -> dict:
+    """The facts as the model sees them. Shares are written as percentages under a name ending in percent,
+    so the model copies 33.4 and has no raw decimal such as 0.3338 to copy."""
+    def convert(node):
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                if key in PERCENT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool):
+                    out[f"{key}_percent"] = round(value * 100, 1)
+                else:
+                    out[key] = convert(value)
+            return out
+        if isinstance(node, list):
+            return [convert(item) for item in node]
+        return node
+
+    return convert(facts)
+
+
+def prompt_payload(facts: dict) -> dict:
+    """Everything the model sees and everything its text is checked against: the facts as percentages,
+    plus the app's own verified sentences."""
+    payload = model_facts(facts)
+    payload["verified_points"] = summary_points(facts)
+    return payload
+
+
+def summary_prompt(facts: dict, problem: Optional[str] = None) -> str:
+    text = SUMMARY_RULES + "\nFACTS as JSON, including verified_points:\n" + json.dumps(prompt_payload(facts), ensure_ascii=True, sort_keys=True)
+    if problem:
+        text += (
+            f"\n\nYour last answer was rejected because it had {problem}. Write the summary again and fix that. "
+            "Copy figures exactly from verified_points and keep to every rule above."
+        )
+    return text
 
 
 def template_summary(facts: dict) -> str:
     """The summary the app writes itself. It uses only facts, so it passes the same checker."""
+    return " ".join(summary_points(facts))
+
+
+def summary_points(facts: dict) -> list[str]:
+    """The app's own sentences about the results, one point each. They are the verified material the AI rewords."""
     parts = [
         f"Your file has {facts['orders']:,} orders from {facts['customers']:,} customers, from {facts['first_month']} to {facts['last_month']}."
     ]
@@ -210,7 +258,7 @@ def template_summary(facts: dict) -> str:
                 f"{sc['estimated_change_in_value']:,} over {sc['horizon_months']} months, with a range of "
                 f"{sc['estimate_range_low']:,} to {sc['estimate_range_high']:,}. This is an estimate that depends on your assumptions."
             )
-    return " ".join(parts)
+    return parts
 
 
 @dataclass
@@ -226,21 +274,28 @@ def _clean_reply(reply: str) -> str:
     return fenced.group(1).strip() if fenced else text
 
 
-def generate_summary(facts: dict, ai_fn: Optional[AIFunction]) -> TextResult:
-    """An AI summary if the model answers and every figure checks out, otherwise the app's own summary."""
+def generate_summary(facts: dict, ai_fn: Optional[AIFunction], retries: int = 1) -> TextResult:
+    """An AI summary if the model answers and every figure checks out, otherwise the app's own summary.
+
+    If a check fails, the model is told what was wrong and may try again, up to retries more times.
+    """
     fallback = template_summary(facts)
     if ai_fn is None:
         return TextResult(fallback, "app", "AI is off, so this summary was written by the app from your results.")
-    try:
-        reply = ai_fn(summary_prompt(facts))
-    except Exception as err:
-        return TextResult(fallback, "app", friendly_error(err))
-    text = _clean_reply(reply)
-    result = check_text(text, facts, max_words=SUMMARY_MAX_WORDS)
-    if not text or not result.ok:
-        why = result.reason() if text else "an empty answer"
-        return TextResult(fallback, "app", f"The AI wrote {why}, so it was discarded and the app's own summary is shown.")
-    return TextResult(text, "ai", "Written by AI. Every figure was checked against your results.")
+    payload = prompt_payload(facts)
+    problem: Optional[str] = None
+    for attempt in range(retries + 1):
+        try:
+            reply = ai_fn(summary_prompt(facts, problem))
+        except Exception as err:
+            return TextResult(fallback, "app", friendly_error(err))
+        text = _clean_reply(reply)
+        result = check_text(text, payload, max_words=SUMMARY_MAX_WORDS)
+        if text and result.ok:
+            note = "Written by AI. Every figure was checked against your results."
+            return TextResult(text, "ai", note + (" It passed on the second try." if attempt else ""))
+        problem = result.reason() if text else "an empty answer"
+    return TextResult(fallback, "app", f"The AI wrote {problem}, so it was discarded and the app's own summary is shown.")
 
 
 # ---------------------------------------------------------------- segment ideas
