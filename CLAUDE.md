@@ -3,9 +3,9 @@
 Read this file first. It holds the plan, the rules, and the exact Week 1 spec.
 
 ## What this is
-A Streamlit web app for small online stores. The owner uploads a CSV of past orders and gets an answer to one question: should we move some ad budget from winning new customers to keeping existing ones, and how much?
+A Streamlit web app for business online stores. The owner uploads a CSV of past orders and gets an answer to one question: should we move some ad budget from winning new customers to keeping existing ones, and how much?
 
-Evidence behind the idea: The CMO Survey, Spring 2026, from Duke Fuqua, found acquisition budgets about 26% larger than retention budgets, while retention was the strongest performance driver. Few tools give a small brand a plain budget answer with the assumptions visible.
+Evidence behind the idea: The CMO Survey, Spring 2026, from Duke Fuqua, found acquisition budgets about 26% larger than retention budgets, while retention was the strongest performance driver. Few tools give a business online store a plain budget answer with the assumptions visible.
 
 The builder is an MBA marketing student. This is a portfolio project that must read as a real marketing tool, not a class demo.
 
