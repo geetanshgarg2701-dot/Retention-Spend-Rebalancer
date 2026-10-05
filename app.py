@@ -18,6 +18,7 @@ from src.metrics import (
 from src import aiconfig, askdata
 from src import insights as ins
 from src import scenario as sc
+from src.quantity import QUANTITY_CHOICES, quantity_preview
 from src.sample_data import DEFAULT_PATH, SYNTHETIC_NOTICE, generate_orders
 
 NO_COLUMN = "No column"
@@ -228,12 +229,10 @@ def stage_columns() -> None:
         else:
             line_label = next(iter(LINE_CHOICES))
             st.caption("Each row counts as one order, because no order id column is picked.")
-        if "quantity" in chosen:
-            multiply = st.checkbox(
-                "Multiply quantity by the order value, use this when the order value is a unit price",
-                value=confirmed["multiply_quantity"] if confirmed else result.multiply_quantity,
-                key=f"opt_{ds['id']}_multiply_{use_ai}",
-            )
+        if "quantity" in chosen and "order_value" in chosen:
+            multiply = _quantity_choice(raw, chosen, confirmed, ds, use_ai)
+            if multiply is None:
+                problems.append("Say whether the order value is the total for the whole order or the price of one item.")
         else:
             multiply = False
             st.caption("Quantity is not used, because no quantity column is picked.")
@@ -243,7 +242,7 @@ def stage_columns() -> None:
     if st.button("Confirm columns and clean", key="confirm_columns", disabled=bool(problems), type="primary"):
         options = {
             "mapping": chosen, "dayfirst": DATE_CHOICES[date_label],
-            "line_item_mode": LINE_CHOICES[line_label], "multiply_quantity": multiply,
+            "line_item_mode": LINE_CHOICES[line_label], "multiply_quantity": bool(multiply),
         }
         try:
             with st.spinner(f"Cleaning {len(raw):,} rows"):
@@ -264,6 +263,30 @@ def stage_columns() -> None:
 
 def _index_of(choices: dict, value) -> int:
     return list(choices.values()).index(value)
+
+
+def _quantity_choice(raw, chosen: dict, confirmed, ds: dict, use_ai: bool):
+    """Ask how to read the order value when a quantity column is picked. Nothing is pre-selected on a first visit."""
+    st.markdown("**How should the order value be read?**")
+    preview = quantity_preview(raw, chosen["order_value"], chosen["quantity"])
+    if preview is not None:
+        st.caption(
+            f'The first rows of "{chosen["order_value"]}" and "{chosen["quantity"]}" in your file, '
+            "with the line value under each reading."
+        )
+        st.table(preview.examples.style.format("{:,.2f}"))
+        st.caption(
+            f"Average line value across {preview.rows_used:,} rows: "
+            f"{preview.average_if_total:,.2f} if the order value is a total, "
+            f"{preview.average_if_unit:,.2f} if it is the price of one item. "
+            "Pick the reading that matches what one order looks like in your store."
+        )
+    labels = list(QUANTITY_CHOICES)
+    pick = st.radio(
+        "Order value meaning", labels, index=_index_of(QUANTITY_CHOICES, confirmed["multiply_quantity"]) if confirmed else None,
+        key=f"opt_{ds['id']}_multiply_{use_ai}", label_visibility="collapsed",
+    )
+    return None if pick is None else QUANTITY_CHOICES[pick]
 
 
 # ------------------------------------------------------------------ stage 3

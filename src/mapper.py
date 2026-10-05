@@ -340,7 +340,8 @@ def _quantity_note(matches: dict[str, FieldMatch]) -> tuple[bool, list[str]]:
         return False, []
     if _looks_like_unit_price(val):
         return True, [
-            f'"{val}" looks like a unit price, so each line value will be "{qty}" times "{val}".'
+            f'"{val}" looks like a unit price, which would mean each line value is "{qty}" times "{val}". '
+            "Check the example on this screen before you choose."
         ]
     return False, [
         f'"{qty}" is mapped but "{val}" looks like an order total, so quantity will not be multiplied. '

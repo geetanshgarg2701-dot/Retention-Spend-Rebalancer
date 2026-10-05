@@ -27,6 +27,58 @@ def fresh():
     return at
 
 
+def confirm_columns(at, total: bool = True):
+    """Answer the order value question when it is asked, then confirm. The sample's Line Total is a total."""
+    from src.quantity import TOTAL_CHOICE, UNIT_CHOICE
+
+    radios = [r for r in at.radio if r.key and "_multiply_" in r.key]
+    if radios:
+        radios[0].set_value(TOTAL_CHOICE if total else UNIT_CHOICE).run()
+    at.button(key="confirm_columns").click().run()
+
+
+def test_the_order_value_question_blocks_confirming_until_answered_and_shows_both_readings():
+    from src.quantity import TOTAL_CHOICE, UNIT_CHOICE
+
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    radio = [r for r in at.radio if r.key and "_multiply_" in r.key][0]
+    assert radio.value is None
+    assert at.button(key="confirm_columns").disabled
+    assert any("total for the whole order or the price of one item" in e.value for e in at.error)
+    assert len(at.table) == 1
+    assert any("if the order value is a total" in c.value and "if it is the price of one item" in c.value
+               for c in at.caption)
+
+    radio.set_value(TOTAL_CHOICE).run()
+    assert not at.button(key="confirm_columns").disabled
+    assert not any("price of one item" in e.value for e in at.error)
+    assert UNIT_CHOICE in radio.options
+
+
+def test_the_two_answers_give_different_totals_and_the_chosen_one_is_used():
+    totals = {}
+    for total in (True, False):
+        at = fresh()
+        at.button(key="load_sample").click().run()
+        confirm_columns(at, total=total)
+        assert not at.exception
+        assert at.session_state["confirmed"]["multiply_quantity"] is (not total)
+        totals[total] = at.session_state["clean"].stats["total_revenue"]
+    assert totals[False] > totals[True]
+
+
+def test_going_back_keeps_the_earlier_answer():
+    from src.quantity import UNIT_CHOICE
+
+    at = fresh()
+    at.button(key="load_sample").click().run()
+    confirm_columns(at, total=False)
+    at.button(key="back_to_columns").click().run()
+    radio = [r for r in at.radio if r.key and "_multiply_" in r.key][0]
+    assert radio.value == UNIT_CHOICE
+
+
 def test_starts_on_the_load_stage_with_privacy_and_synthetic_labels():
     at = fresh()
     assert at.button(key="load_sample") is not None
@@ -46,7 +98,7 @@ def test_synthetic_sample_runs_through_all_three_stages():
     assert any("AI matching is off" in c.value for c in at.caption)
     assert at.toggle(key="use_ai").disabled
 
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     assert not at.exception
     assert at.session_state["stage"] == 3
     _, truth = generate_orders()
@@ -60,7 +112,7 @@ def test_synthetic_sample_runs_through_all_three_stages():
 def to_results():
     at = fresh()
     at.button(key="load_sample").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     at.button(key="to_results").click().run()
     assert not at.exception
     return at
@@ -85,7 +137,7 @@ def test_each_stage_has_its_own_title_and_the_funnel_is_computed():
     assert any("Load your orders" in s.value for s in at.subheader)
     at.button(key="load_sample").click().run()
     assert any("Confirm columns" in s.value for s in at.subheader)
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     assert any("Review the cleaning" in s.value for s in at.subheader)
     at.button(key="to_results").click().run()
     assert not at.exception
@@ -480,7 +532,7 @@ def test_cleaning_again_invalidates_the_saved_results(monkeypatch):
     assert len(calls) == 1
     at.button(key="back_to_review").click().run()
     at.button(key="back_to_columns").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     at.button(key="to_results").click().run()
     assert at.session_state["clean_n"] == 2 and len(calls) == 2  # new cleaned data means a fresh report
 
@@ -507,7 +559,7 @@ def test_the_clean_csv_is_built_only_on_demand(monkeypatch):
     monkeypatch.setattr(pd.DataFrame, "to_csv", spy)
     at = fresh()
     at.button(key="load_sample").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     assert at.session_state["stage"] == 3 and not at.exception
     at.run()
     assert built == []  # the review screen rendered more than once without building the file
@@ -524,7 +576,7 @@ def test_an_unexpected_error_shows_a_friendly_message_and_never_leaks_details(mo
     monkeypatch.setattr("src.metrics.retention_report", explode)
     at = fresh()
     at.button(key="load_sample").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     with caplog.at_level(logging.ERROR, logger="rsr"):
         at.button(key="to_results").click().run()
     assert not at.exception  # the app handled it, so no traceback reached the page
@@ -545,7 +597,7 @@ def test_real_errors_are_raised_in_tests_so_they_cannot_be_missed(monkeypatch):
     monkeypatch.setattr("src.metrics.retention_report", explode)
     at = fresh()
     at.button(key="load_sample").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     at.button(key="to_results").click().run()
     assert at.exception  # RSR_RAISE_ERRORS is on in the test suite
 
@@ -613,7 +665,7 @@ def test_same_column_for_two_fields_blocks_the_confirm_button():
 def test_loading_a_different_file_resets_the_flow():
     at = fresh()
     at.button(key="load_sample").click().run()
-    at.button(key="confirm_columns").click().run()
+    confirm_columns(at)
     assert at.session_state["stage"] == 3
     at.button(key="back_to_columns").click().run()
     at.button(key="back_to_load").click().run()

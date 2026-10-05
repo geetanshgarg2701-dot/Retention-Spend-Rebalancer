@@ -8,7 +8,7 @@ Status: Weeks 1 to 5 of a six-week build are working and deployed. You can load 
 
 ## What works today
 1. Upload a CSV of past orders, or load the synthetic sample.
-2. Confirm the column matches. Each suggestion shows its confidence and the reason for it. A date format option and a line item option are included.
+2. Confirm the column matches. Each suggestion shows its confidence and the reason for it. A date format option and a line item option are included. If a quantity column is picked, you must say whether the order value is the total for the whole order or the price of one item. The screen shows the first rows and the average under both readings, because a wrong choice inflates every money figure.
 3. Review the cleaning: metrics, a rule-by-rule table of what was removed and why, warnings, a preview, and a download of the clean CSV.
 4. See retention results: an overview row with orders per month, how many customers come back the month after, customers by segment and payback progress, then the repeat purchase rate, a funnel of customers by order count, cohort retention by first order month, customer segments, and customer value with payback.
 5. Try a budget scenario: enter your budget, your current split and what it costs to win and to bring back a customer, then move a slider to see the estimated change in value, the chance the move beats your current split, and the customers won and brought back. A simulation of 2,000 draws gives a range instead of one number, and an assumptions table lists every input and where it came from.
@@ -91,6 +91,7 @@ The command refuses to overwrite an existing file.
 - app.py: the six-stage Streamlit app
 - src/loading.py: upload validation
 - src/mapper.py: rule-based and optional AI column matching
+- src/quantity.py: the first rows and averages that show what each reading of the order value would do
 - src/cleaning.py: the eight cleaning rules, warnings and stats
 - src/metrics.py: repeat rate, order count funnel, cohorts, segments, customer value and payback
 - src/scenario.py: the budget scenario model, simulation, sentences and assumptions table
