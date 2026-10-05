@@ -92,7 +92,7 @@ def test_shopify_style_headers():
     assert h["order_id"] is None
     assert r.matches["order_value"].confidence == "high"
     assert r.multiply_quantity is False
-    assert r.warnings and "will not be multiplied" in r.warnings[0]
+    assert r.warnings and "quantity is not multiplied" in r.warnings[0]
 
 
 def test_woocommerce_style_headers():
